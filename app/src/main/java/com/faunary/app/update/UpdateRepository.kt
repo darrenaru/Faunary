@@ -37,6 +37,16 @@ data class ReleasePatch(val fromSha256: String, val path: String, val size: Long
 @Serializable
 data class AbiRelease(val apk: ReleaseFile, val patches: List<ReleasePatch> = emptyList())
 
+/** One published version in the manifest's history; [notes] may hold several lines ("- " = bullet). */
+@Serializable
+data class ChangelogEntry(
+    val versionCode: Int,
+    val versionName: String,
+    val notes: String = "",
+    /** ISO date (yyyy-MM-dd) the version was published. */
+    val date: String? = null,
+)
+
 @Serializable
 data class ReleaseManifest(
     val versionCode: Int,
@@ -45,6 +55,8 @@ data class ReleaseManifest(
     /** Installed builds below this version code must update before the app can be used (0 = none). */
     val minVersionCode: Int = 0,
     val abis: Map<String, AbiRelease>,
+    /** Every recent version, newest first, so users who skipped some see all their changes. */
+    val changelog: List<ChangelogEntry> = emptyList(),
 )
 
 // ---- What the UI shows ----
@@ -65,6 +77,8 @@ data class UpdateState(
     val allowMobileData: Boolean = false,
     /** From the manifest; remembered so the requirement also holds while offline. */
     val minVersionCode: Int = 0,
+    /** Versions newer than the installed one, newest first: what the user gets by updating. */
+    val changelog: List<ChangelogEntry> = emptyList(),
 ) {
     val hasUpdate: Boolean get() = availableCode > BuildConfig.VERSION_CODE
 
@@ -130,7 +144,7 @@ class UpdateRepository @Inject constructor(@ApplicationContext private val conte
             // A required update is fetched right away, whatever the network: the app can't be used without it.
             val mandatory = manifest.minVersionCode > BuildConfig.VERSION_CODE
             val fetch = download || mandatory
-            update { copy(minVersionCode = manifest.minVersionCode) }
+            update { copy(minVersionCode = manifest.minVersionCode, changelog = pendingChanges(manifest)) }
 
             // Already downloaded and verified for this version?
             if (prefs.getInt(KEY_READY_CODE, 0) == manifest.versionCode && readyFile().exists()) {
@@ -286,6 +300,7 @@ class UpdateRepository @Inject constructor(@ApplicationContext private val conte
             putBoolean(KEY_IS_PATCH, s.isPatch)
             putLong(KEY_CHECKED, s.lastChecked)
             putInt(KEY_MIN_CODE, s.minVersionCode)
+            putString(KEY_CHANGELOG, json.encodeToString(s.changelog))
         }
     }
 
@@ -302,8 +317,16 @@ class UpdateRepository @Inject constructor(@ApplicationContext private val conte
             lastChecked = prefs.getLong(KEY_CHECKED, 0),
             allowMobileData = prefs.getBoolean(KEY_ALLOW_METERED, false),
             minVersionCode = prefs.getInt(KEY_MIN_CODE, 0),
+            changelog = prefs.getString(KEY_CHANGELOG, null)
+                ?.let { runCatching { json.decodeFromString<List<ChangelogEntry>>(it) }.getOrNull() }
+                .orEmpty().filter { it.versionCode > BuildConfig.VERSION_CODE },
         )
     }
+
+    /** Changelog entries this install doesn't have yet; older manifests only carry the latest notes. */
+    private fun pendingChanges(manifest: ReleaseManifest): List<ChangelogEntry> =
+        manifest.changelog.filter { it.versionCode > BuildConfig.VERSION_CODE }.sortedByDescending { it.versionCode }
+            .ifEmpty { listOf(ChangelogEntry(manifest.versionCode, manifest.versionName, manifest.notes)) }
 
     companion object {
         private const val TAG = "FaunaryUpdate"
@@ -319,5 +342,6 @@ class UpdateRepository @Inject constructor(@ApplicationContext private val conte
         private const val KEY_BASE_SHA_TIME = "base_sha_time"
         private const val KEY_ALLOW_METERED = "allow_metered"
         private const val KEY_MIN_CODE = "min_code"
+        private const val KEY_CHANGELOG = "changelog"
     }
 }

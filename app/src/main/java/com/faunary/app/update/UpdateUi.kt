@@ -1,5 +1,14 @@
 package com.faunary.app.update
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import com.faunary.app.BuildConfig
+import com.faunary.app.ui.components.Pill
+import java.text.SimpleDateFormat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -80,7 +89,10 @@ fun formatBytes(bytes: Long): String = when {
     else -> "$bytes B"
 }
 
-/** Compact card used on the map (when there's something actionable) and in Profile (always). */
+/**
+ * Compact card used on the map (when there's something actionable) and in Profile (always).
+ * "Pasang" first opens the full changelog; the update itself starts from there.
+ */
 @Composable
 fun UpdateCard(
     state: UpdateState,
@@ -90,6 +102,7 @@ fun UpdateCard(
     onDismiss: (() -> Unit)? = null,
 ) {
     val c = FaunaryTheme.colors
+    var showChanges by rememberSaveable { mutableStateOf(false) }
     FaunaryCard(modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconBadge(Icons.Rounded.SystemUpdate, background = c.highlight)
@@ -102,7 +115,7 @@ fun UpdateCard(
                 val sizeText = formatBytes(state.downloadSize) + if (state.isPatch) " · hanya bagian yang berubah" else ""
                 Text(
                     when {
-                        state.ready -> state.notes.ifBlank { "Ketuk Pasang untuk memperbarui." }
+                        state.ready -> sizeText
                         state.downloading -> {
                             val pct = if (state.downloadSize > 0) (state.downloadedBytes * 100 / state.downloadSize).coerceIn(0, 100) else 0
                             "Mengunduh $pct% · ${formatBytes(state.downloadedBytes)} dari ${formatBytes(state.downloadSize)}"
@@ -112,6 +125,11 @@ fun UpdateCard(
                         else -> sizeText
                     },
                     style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary, maxLines = 2,
+                )
+                Text(
+                    changesLabel(state),
+                    style = MaterialTheme.typography.labelLarge, color = c.primary,
+                    modifier = Modifier.padding(top = 4.dp).clip(CircleShape).clickable { showChanges = true },
                 )
             }
             if (onDismiss != null) {
@@ -130,14 +148,113 @@ fun UpdateCard(
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (state.ready) {
-                    FaunaryButton("Pasang", onInstall, Modifier.weight(1f), height = 44.dp)
+                    FaunaryButton("Pasang", { showChanges = true }, Modifier.weight(1f), height = 44.dp)
                 } else {
                     FaunaryButton("Unduh pakai data seluler", onDownloadNow, Modifier.weight(1f), kind = ButtonKind.Secondary, height = 44.dp)
                 }
             }
         }
     }
+    if (showChanges) {
+        ChangelogSheet(
+            state = state,
+            onInstall = {
+                showChanges = false
+                onInstall()
+            },
+            onDownloadNow = onDownloadNow,
+            onDismiss = { showChanges = false },
+        )
+    }
 }
+
+private fun changesLabel(state: UpdateState): String {
+    val n = state.changelog.size
+    return if (n > 1) "Lihat yang baru ($n versi)" else "Lihat yang baru"
+}
+
+/**
+ * Bottom sheet with every change since the installed version; the update is started from here,
+ * so users always see what they are getting first.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ChangelogSheet(state: UpdateState, onInstall: () -> Unit, onDownloadNow: () -> Unit, onDismiss: () -> Unit) {
+    val c = FaunaryTheme.colors
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = c.background,
+    ) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 16.dp)) {
+            Text("Yang baru", style = MaterialTheme.typography.headlineSmall, color = c.foreground)
+            Text(
+                "Dari versi ${BuildConfig.VERSION_NAME} ke ${state.availableVersion}",
+                style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary,
+            )
+            Spacer(Modifier.height(16.dp))
+            ChangelogList(state.changelog, Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()))
+            Spacer(Modifier.height(16.dp))
+            when {
+                state.ready -> FaunaryButton("Update Sekarang", onInstall, Modifier.fillMaxWidth(), icon = Icons.Rounded.SystemUpdate)
+                state.downloading -> {
+                    val pct = if (state.downloadSize > 0) (state.downloadedBytes * 100 / state.downloadSize).coerceIn(0, 100) else 0
+                    FaunaryButton("Mengunduh $pct%…", {}, Modifier.fillMaxWidth(), enabled = false)
+                }
+                else -> FaunaryButton(
+                    "Unduh sekarang (${formatBytes(state.downloadSize)})", onDownloadNow, Modifier.fillMaxWidth(),
+                    icon = Icons.Rounded.SystemUpdate,
+                )
+            }
+        }
+    }
+}
+
+/** Versions newest first; each with its number, date and notes ("- " lines become bullets). */
+@Composable
+fun ChangelogList(entries: List<ChangelogEntry>, modifier: Modifier = Modifier) {
+    val c = FaunaryTheme.colors
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        entries.forEachIndexed { i, entry ->
+            FaunaryCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Versi ${entry.versionName}", style = MaterialTheme.typography.titleSmall, color = c.foreground)
+                    if (i == 0) {
+                        Spacer(Modifier.width(8.dp))
+                        Pill("Terbaru")
+                    }
+                    Spacer(Modifier.weight(1f))
+                    entry.date?.let { releaseDate(it) }?.let {
+                        Text(it, style = MaterialTheme.typography.labelMedium, color = c.foregroundMuted)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                val lines = entry.notes.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                if (lines.isEmpty()) {
+                    Text("Perbaikan dan peningkatan.", style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary)
+                }
+                lines.forEach { line ->
+                    val bullet = line.startsWith("- ") || line.startsWith("• ")
+                    Row(Modifier.padding(vertical = 2.dp)) {
+                        if (bullet) {
+                            Box(Modifier.padding(top = 8.dp, end = 10.dp).size(5.dp).clip(CircleShape).background(c.primary))
+                        }
+                        Text(
+                            if (bullet) line.drop(2) else line,
+                            style = MaterialTheme.typography.bodyMedium, color = c.foreground,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** "2026-09-27" -> "27 Sep 2026". */
+private fun releaseDate(iso: String): String? = runCatching {
+    val id = Locale.forLanguageTag("id-ID")
+    SimpleDateFormat("d MMM yyyy", id).format(SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(iso)!!)
+}.getOrNull()
 
 /** Starts install, first sending the user to the one-time "install unknown apps" setting if needed. */
 @Composable
@@ -168,29 +285,29 @@ fun MandatoryUpdateScreen(viewModel: UpdateViewModel = hiltViewModel()) {
     }
     val busy = state.downloading || (installWhenReady && !state.ready)
 
-    Box(
+    Column(
         Modifier.fillMaxSize().background(c.background).statusBarsPadding().navigationBarsPadding().padding(24.dp),
-        contentAlignment = Alignment.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-            Box(Modifier.size(96.dp).clip(CircleShape).background(c.highlight), contentAlignment = Alignment.Center) {
-                Icon(Icons.Rounded.SystemUpdate, null, Modifier.size(48.dp), tint = c.onHighlight)
+            Spacer(Modifier.height(12.dp))
+            Box(Modifier.size(80.dp).clip(CircleShape).background(c.highlight), contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.SystemUpdate, null, Modifier.size(40.dp), tint = c.onHighlight)
             }
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(18.dp))
             Text("Pembaruan wajib", style = MaterialTheme.typography.headlineMedium, color = c.foreground, textAlign = TextAlign.Center)
             Spacer(Modifier.height(8.dp))
             Text(
                 "Versi ${state.availableVersion ?: "terbaru"} diperlukan untuk melanjutkan. Perbarui Faunary agar tetap bisa memakai aplikasi.",
                 style = MaterialTheme.typography.bodyLarge, color = c.foregroundSecondary, textAlign = TextAlign.Center,
             )
-            if (state.notes.isNotBlank()) {
-                Spacer(Modifier.height(20.dp))
-                FaunaryCard(Modifier.fillMaxWidth()) {
-                    Text("Yang baru", style = MaterialTheme.typography.labelLarge, color = c.foregroundSecondary)
-                    Spacer(Modifier.height(6.dp))
-                    Text(state.notes, style = MaterialTheme.typography.bodyMedium, color = c.foreground)
-                }
-            }
+            Spacer(Modifier.height(20.dp))
+            Text("Yang baru", style = MaterialTheme.typography.titleMedium, color = c.foreground, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+        }
+        // Full changelog since the installed version, scrollable between the header and the button.
+        ChangelogList(state.changelog, Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()))
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
             Spacer(Modifier.height(24.dp))
             if (state.downloading && state.downloadSize > 0) {
                 LinearProgressIndicator(

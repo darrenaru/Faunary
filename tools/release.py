@@ -4,6 +4,10 @@
     python tools/release.py --notes "Perbaikan peta dan rute"
     python tools/release.py --notes "..." --version-name 0.4.0
     python tools/release.py --notes "..." --mandatory     # older versions must update first
+    python tools/release.py --notes-file notes.txt        # one change per line, "- " for bullets
+
+Every release is also added to the manifest's changelog (newest first), so the app can show all
+changes since the version a user has installed before they update.
 
 Steps: bump version.properties -> assembleRelease (one APK per ABI) -> for each of the last few
 published versions, build a bsdiff patch (jbsdiff, the same library the app uses to apply it) ->
@@ -14,6 +18,7 @@ Needs SUPABASE_URL in local.properties and a service-role key, either in the env
 used here to upload; it is never part of the app.
 """
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -28,6 +33,7 @@ BUCKET = "app-releases"
 ABIS = ["arm64-v8a", "armeabi-v7a"]
 KEEP_HISTORY = 4          # patches are generated from this many previous versions
 MAX_PATCH_RATIO = 0.8     # skip patches that save less than 20%
+KEEP_CHANGELOG = 30       # versions kept in the manifest's changelog
 
 
 def read_props(path: Path) -> dict:
@@ -110,12 +116,15 @@ def make_patch(old: Path, new: Path, out: Path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--notes", required=True, help="Catatan rilis yang tampil di aplikasi")
+    notes_arg = ap.add_mutually_exclusive_group(required=True)
+    notes_arg.add_argument("--notes", help="Catatan rilis yang tampil di aplikasi (baris baru = poin baru)")
+    notes_arg.add_argument("--notes-file", help="File teks berisi catatan rilis, satu perubahan per baris")
     ap.add_argument("--version-name", help="Default: naikkan angka terakhir, mis. 0.2.0 -> 0.2.1")
     ap.add_argument("--no-bump", action="store_true", help="Pakai versi saat ini (mis. mengulang upload)")
     ap.add_argument("--mandatory", action="store_true",
                     help="Pembaruan wajib: versi yang lebih lama diblokir sampai memperbarui")
     args = ap.parse_args()
+    notes = (Path(args.notes_file).read_text(encoding="utf-8") if args.notes_file else args.notes).strip()
 
     local = read_props(ROOT / "local.properties")
     url = local.get("SUPABASE_URL")
@@ -158,8 +167,11 @@ def main():
     work = ROOT / "build" / "release-cache"
     # Once a release is mandatory, later optional releases keep that floor.
     min_code = code if args.mandatory else (current or {}).get("minVersionCode", 0)
-    manifest = {"versionCode": code, "versionName": name, "notes": args.notes, "minVersionCode": min_code,
-                "abis": {}, "history": history}
+    changelog = [{"versionCode": code, "versionName": name, "notes": notes,
+                  "date": datetime.date.today().isoformat()}]
+    changelog += [e for e in (current or {}).get("changelog", []) if e["versionCode"] < code]
+    manifest = {"versionCode": code, "versionName": name, "notes": notes, "minVersionCode": min_code,
+                "abis": {}, "history": history, "changelog": changelog[:KEEP_CHANGELOG]}
     for abi in ABIS:
         apk = ROOT / "app" / "build" / "outputs" / "apk" / "release" / f"app-{abi}-release.apk"
         if not apk.exists():

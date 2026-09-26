@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -61,6 +62,7 @@ import com.faunary.app.data.SettingsRepository
 import com.faunary.app.data.SightingRepository
 import com.faunary.app.data.ThemeMode
 import com.faunary.app.domain.CollectionStats
+import com.faunary.app.remote.SupabaseProvider
 import com.faunary.app.ui.components.ButtonKind
 import com.faunary.app.ui.components.FaunaryButton
 import com.faunary.app.ui.components.FaunaryCard
@@ -103,7 +105,10 @@ private val ExportJson = Json { prettyPrint = true }
 class ProfileViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val repository: SightingRepository,
+    private val supabase: SupabaseProvider,
 ) : ViewModel() {
+
+    val online: Boolean get() = supabase.isConfigured
 
     val state: StateFlow<ProfileUiState> = combine(settingsRepo.settings, repository.observeAll()) { s, all ->
         ProfileUiState(s, CollectionStats.from(all), all.minOfOrNull { it.timestamp })
@@ -112,7 +117,12 @@ class ProfileViewModel @Inject constructor(
     fun setTheme(mode: ThemeMode) = settingsRepo.setThemeMode(mode)
     fun setMap3D(enabled: Boolean) = settingsRepo.setMap3D(enabled)
     fun setMinConfidence(v: Float) = settingsRepo.setMinConfidence(v)
-    fun setName(name: String) = settingsRepo.setExplorerName(name)
+    fun setName(name: String) {
+        settingsRepo.setExplorerName(name)
+        viewModelScope.launch { supabase.syncProfile() }
+    }
+
+    fun setShareLive(enabled: Boolean) = settingsRepo.setShareLiveLocation(enabled)
 
     /** Writes the collection as JSON and opens the share sheet. */
     fun export(context: Context) = viewModelScope.launch {
@@ -217,6 +227,28 @@ fun ProfileScreen(viewModel: ProfileViewModel = hiltViewModel()) {
             }
         }
 
+        if (viewModel.online) {
+            FaunaryCard {
+                SettingTitle(Icons.Rounded.Public, "Komunitas", "Temuanmu tampil publik di peta sebagai \"${state.settings.explorerName}\"")
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Bagikan lokasi live", style = MaterialTheme.typography.titleSmall, color = c.foreground)
+                        Text("Penjelajah lain melihat posisimu selama aplikasi terbuka.", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(
+                        checked = state.settings.shareLiveLocation,
+                        onCheckedChange = viewModel::setShareLive,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = c.onPrimary, checkedTrackColor = c.primary,
+                            uncheckedThumbColor = c.foregroundMuted, uncheckedTrackColor = c.surfaceMuted, uncheckedBorderColor = c.border,
+                        ),
+                    )
+                }
+            }
+        }
+
         FaunaryCard {
             SettingTitle(Icons.Rounded.AutoAwesome, "Ambang keyakinan AI", "Deteksi di bawah nilai ini diabaikan")
             Spacer(Modifier.height(8.dp))
@@ -248,7 +280,11 @@ fun ProfileScreen(viewModel: ProfileViewModel = hiltViewModel()) {
             SettingTitle(Icons.Rounded.Lock, "Privasi", null)
             Spacer(Modifier.height(8.dp))
             Text(
-                "Semua foto, lokasi, dan catatan disimpan hanya di perangkat ini. Deteksi AI berjalan offline dan tidak ada data yang diunggah tanpa persetujuanmu.",
+                if (viewModel.online) {
+                    "Temuan (foto, jenis, catatan, dan lokasi) dibagikan publik ke peta komunitas. Favorit tetap pribadi di perangkat ini. Deteksi AI berjalan offline di HP-mu."
+                } else {
+                    "Semua foto, lokasi, dan catatan disimpan hanya di perangkat ini. Deteksi AI berjalan offline."
+                },
                 style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary,
             )
         }

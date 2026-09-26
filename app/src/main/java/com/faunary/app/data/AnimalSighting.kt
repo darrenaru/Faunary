@@ -1,5 +1,6 @@
 package com.faunary.app.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import com.faunary.app.domain.AnimalCategory
@@ -48,9 +49,27 @@ data class AnimalSighting(
     val note: String?,
     val isFavorite: Boolean = false,
     val timestamp: Long,
+    /** Row id on the server once uploaded. */
+    val remoteId: String? = null,
+    @ColumnInfo(defaultValue = "0") val syncState: Int = SyncState.PENDING,
 ) {
     val animalCategory: AnimalCategory get() = AnimalCategory.fromName(category)
     val isAiDetected: Boolean get() = aiLabel != null && confidence > 0f
     val wasCorrected: Boolean get() = aiLabel != null && !aiLabel.equals(animalLabel, ignoreCase = true)
     val aspectRatio: Float get() = if (photoHeight > 0) photoWidth.toFloat() / photoHeight else 4f / 3f
 }
+
+object SyncState {
+    /** Not uploaded yet. */
+    const val PENDING = 0
+    const val SYNCED = 1
+    /** Uploaded, but edited locally since. */
+    const val DIRTY = 2
+}
+
+/** A server row whose deletion still has to be sent (e.g. deleted while offline). */
+@Entity(tableName = "pending_deletes")
+data class PendingDelete(
+    @PrimaryKey val remoteId: String,
+    val photoPath: String?,
+)

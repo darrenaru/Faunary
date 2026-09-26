@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -18,12 +19,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.faunary.app.domain.AnimalCategory
 import com.faunary.app.location.GeoPoint
+import com.faunary.app.remote.Bounds
 import com.faunary.app.ui.theme.FaunaryTheme
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.EdgeInsets
 import com.mapbox.maps.MapInitOptions
 import com.mapbox.maps.MapView
+import com.mapbox.maps.toCameraOptions
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
 import com.mapbox.maps.plugin.animation.easeTo
 import com.mapbox.maps.plugin.animation.flyTo
@@ -47,12 +50,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 
+/** Map layers, drawn bottom to top in declaration order. */
+enum class MarkerKind { OWN, COMMUNITY, LIVE }
+
 data class MapMarker(
-    val id: Long,
+    /** Unique across layers, e.g. "own:12", "com:<uuid>", "live:<uuid>". */
+    val key: String,
     val latitude: Double,
     val longitude: Double,
-    val photoPath: String?,
+    /** Local file path or https URL; null draws the category emoji instead. */
+    val photo: String?,
     val category: AnimalCategory,
+    val kind: MarkerKind = MarkerKind.OWN,
+    /** Name shown under live-user markers. */
+    val label: String? = null,
 )
 
 /** Default camera when there is no data or GPS yet (Taman Suropati, Jakarta — as in the design). */
@@ -98,8 +109,8 @@ fun FaunaMap(
     markers: List<MapMarker>,
     modifier: Modifier = Modifier,
     controller: FaunaMapController = rememberFaunaMapController(),
-    selectedId: Long? = null,
-    onMarkerClick: (Long) -> Unit = {},
+    selectedKey: String? = null,
+    onMarkerClick: (String) -> Unit = {},
     onMapClick: () -> Unit = {},
     initialCenter: GeoPoint = DefaultCenter,
     initialZoom: Double = 14.0,
@@ -108,12 +119,14 @@ fun FaunaMap(
     darkTheme: Boolean = isSystemInDarkTheme(),
     threeD: Boolean = false,
     onCameraSnapshot: ((GeoPoint, Double) -> Unit)? = null,
+    onCameraIdle: ((Bounds) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
     val colors = FaunaryTheme.colors
     val currentOnMarkerClick by rememberUpdatedState(onMarkerClick)
     val currentOnMapClick by rememberUpdatedState(onMapClick)
+    val currentOnCameraIdle by rememberUpdatedState(onCameraIdle)
 
     val mapView = remember {
         MapView(
@@ -131,9 +144,9 @@ fun FaunaMap(
             compass.enabled = false
         }
     }
-    val markerFactory = remember { MarkerFactory(density.density) }
-    var manager by remember { mutableStateOf<PointAnnotationManager?>(null) }
-    val annotationToSighting = remember { mutableMapOf<String, Long>() }
+    val markerFactory = remember { MarkerFactory(context, density.density) }
+    var managers by remember { mutableStateOf<Map<MarkerKind, PointAnnotationManager>>(emptyMap()) }
+    val annotationToKey = remember { mutableMapOf<String, String>() }
     var lastAnnotationClick by remember { mutableStateOf(0L) }
 
     DisposableEffect(mapView) {
@@ -143,7 +156,13 @@ fun FaunaMap(
             if (SystemClock.uptimeMillis() - lastAnnotationClick > 300) currentOnMapClick()
             false
         }
+        val idle = mapView.mapboxMap.subscribeMapIdle {
+            val map = mapView.mapboxMap
+            val b = map.coordinateBoundsForCamera(map.cameraState.toCameraOptions())
+            currentOnCameraIdle?.invoke(Bounds(b.south(), b.west(), b.north(), b.east()))
+        }
         onDispose {
+            idle.cancel()
             mapView.mapboxMap.cameraState.let { cam ->
                 onCameraSnapshot?.invoke(GeoPoint(cam.center.latitude(), cam.center.longitude()), cam.zoom)
             }
@@ -154,27 +173,36 @@ fun FaunaMap(
 
     LaunchedEffect(darkTheme, threeD) {
         mapView.mapboxMap.loadStyle(MapStyle.json(darkTheme, threeD)) {
-            if (manager == null) {
-                val canyon = 0xFFDF6D41.toInt()
-                manager = mapView.annotations.createPointAnnotationManager(
-                    AnnotationConfig(
-                        annotationSourceOptions = AnnotationSourceOptions(
-                            clusterOptions = ClusterOptions(
-                                clusterRadius = 60,
-                                circleRadius = 20.0,
-                                textColor = 0xFFFBF8F1.toInt(),
-                                textSize = 14.0,
-                                colorLevels = listOf(0 to canyon),
-                                clusterMaxZoom = 15,
-                            ),
+            if (managers.isEmpty()) {
+                managers = MarkerKind.entries.associateWith { kind ->
+                    // Own finds cluster in Canyon, community finds in Info blue; live users never cluster.
+                    val clusterColor = when (kind) {
+                        MarkerKind.OWN -> 0xFFDF6D41.toInt()
+                        MarkerKind.COMMUNITY -> 0xFF7395BF.toInt()
+                        MarkerKind.LIVE -> null
+                    }
+                    mapView.annotations.createPointAnnotationManager(
+                        AnnotationConfig(
+                            annotationSourceOptions = clusterColor?.let {
+                                AnnotationSourceOptions(
+                                    clusterOptions = ClusterOptions(
+                                        clusterRadius = 60,
+                                        circleRadius = 20.0,
+                                        textColor = 0xFFFBF8F1.toInt(),
+                                        textSize = 14.0,
+                                        colorLevels = listOf(0 to it),
+                                        clusterMaxZoom = 15,
+                                    ),
+                                )
+                            },
                         ),
-                    ),
-                ).apply {
-                    addClickListener(OnPointAnnotationClickListener { annotation ->
-                        lastAnnotationClick = SystemClock.uptimeMillis()
-                        annotationToSighting[annotation.id]?.let(currentOnMarkerClick)
-                        true
-                    })
+                    ).apply {
+                        addClickListener(OnPointAnnotationClickListener { annotation ->
+                            lastAnnotationClick = SystemClock.uptimeMillis()
+                            annotationToKey[annotation.id]?.let(currentOnMarkerClick)
+                            true
+                        })
+                    }
                 }
             }
         }
@@ -220,21 +248,29 @@ fun FaunaMap(
         mapView.attribution.updateSettings { marginBottom = px + 8f }
     }
 
-    LaunchedEffect(manager, markers, selectedId, colors.isDark) {
-        val m = manager ?: return@LaunchedEffect
-        val options = withContext(Dispatchers.Default) {
-            markers.map { marker ->
-                val selected = marker.id == selectedId
-                marker.id to PointAnnotationOptions()
-                    .withPoint(Point.fromLngLat(marker.longitude, marker.latitude))
-                    .withIconImage(markerFactory.marker(marker.photoPath, marker.category, selected, colors.isDark))
-                    .withSymbolSortKey(if (selected) 10.0 else 0.0)
+    // One effect per layer so a live-position tick doesn't redraw every photo marker.
+    val byKind = markers.groupBy { it.kind }
+    MarkerKind.entries.forEach { kind ->
+        val layer = byKind[kind].orEmpty()
+        val layerSelected = selectedKey?.takeIf { k -> layer.any { it.key == k } }
+        key(kind) {
+            LaunchedEffect(managers, layer, layerSelected, colors.isDark) {
+                val m = managers[kind] ?: return@LaunchedEffect
+                val options = withContext(Dispatchers.IO) {
+                    layer.map { marker ->
+                        val selected = marker.key == layerSelected
+                        marker.key to PointAnnotationOptions()
+                            .withPoint(Point.fromLngLat(marker.longitude, marker.latitude))
+                            .withIconImage(markerFactory.marker(marker, selected, colors.isDark))
+                            .withSymbolSortKey(if (selected) 10.0 else 0.0)
+                    }
+                }
+                m.annotations.forEach { annotationToKey.remove(it.id) }
+                m.deleteAll()
+                val created = m.create(options.map { it.second })
+                created.forEachIndexed { i, annotation -> annotationToKey[annotation.id] = options[i].first }
             }
         }
-        m.deleteAll()
-        annotationToSighting.clear()
-        val created = m.create(options.map { it.second })
-        created.forEachIndexed { i, annotation -> annotationToSighting[annotation.id] = options[i].first }
     }
 
     AndroidView(factory = { mapView }, modifier = modifier)

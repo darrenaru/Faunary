@@ -37,6 +37,21 @@ import androidx.compose.material.icons.rounded.Pets
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import com.faunary.app.location.GeoPoint
+import com.faunary.app.remote.CommunitySighting
+import com.faunary.app.util.Geo
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -84,6 +99,7 @@ val BottomBarSpace = 104.dp
 fun MapScreen(
     focusId: Long?,
     onOpenDetail: (Long) -> Unit,
+    onOpenCommunity: (String) -> Unit,
     onOpenCamera: () -> Unit,
     viewModel: MapViewModel = hiltViewModel(),
 ) {
@@ -107,7 +123,7 @@ fun MapScreen(
         val focus = focusId?.let { id -> state.all.firstOrNull { it.id == id } }
         when {
             focus != null -> {
-                viewModel.select(focus.id)
+                viewModel.select(ownKey(focus.id))
                 controller.flyTo(focus.latitude, focus.longitude, 16.0, cardPaddingPx)
             }
             state.all.isNotEmpty() -> controller.flyTo(state.all.first().latitude, state.all.first().longitude, 13.5)
@@ -122,16 +138,17 @@ fun MapScreen(
         FaunaMap(
             markers = state.markers,
             controller = controller,
-            selectedId = state.selected?.id,
-            onMarkerClick = { id ->
-                viewModel.select(id)
-                state.visible.firstOrNull { it.id == id }?.let {
+            selectedKey = state.selection?.key,
+            onMarkerClick = { key ->
+                viewModel.select(key)
+                state.markers.firstOrNull { it.key == key }?.let {
                     controller.flyTo(it.latitude, it.longitude, bottomPaddingPx = cardPaddingPx)
                 }
             },
+            onCameraIdle = viewModel::onCameraIdle,
             onMapClick = { viewModel.select(null) },
             showUserLocation = locationPermission.granted,
-            ornamentBottomPadding = if (state.selected != null) 0.dp else BottomBarSpace,
+            ornamentBottomPadding = if (state.selection != null) 0.dp else BottomBarSpace,
             darkTheme = c.isDark,
             threeD = state.map3D,
             initialCenter = viewModel.camera?.first ?: DefaultCenter,
@@ -187,6 +204,18 @@ fun MapScreen(
             Modifier.align(Alignment.CenterEnd).padding(end = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            if (state.online) {
+                LayersButton(
+                    layers = state.layers,
+                    liveCount = state.liveUsers.size,
+                    shareLive = state.settings.shareLiveLocation,
+                    onLayers = viewModel::setLayers,
+                    onShareLive = { enabled ->
+                        viewModel.setShareLive(enabled)
+                        if (enabled && !locationPermission.granted) locationPermission.request()
+                    },
+                )
+            }
             DimensionToggle(threeD = state.map3D, onClick = viewModel::toggle3D)
             LocateButton({
                 if (locationPermission.granted) {
@@ -207,13 +236,13 @@ fun MapScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             AnimatedVisibility(
-                visible = !locationPermission.granted && !locationDismissed && state.selected == null,
+                visible = !locationPermission.granted && !locationDismissed && state.selection == null,
                 enter = fadeIn(tween(200)), exit = fadeOut(tween(150)),
             ) {
                 PermissionCard(
                     icon = Icons.Rounded.LocationOn,
                     title = "Aktifkan lokasi",
-                    message = "Faunary mencatat titik GPS setiap kali kamu memotret satwa, supaya temuanmu muncul di peta. Lokasi hanya disimpan di perangkat ini.",
+                    message = "Faunary mencatat titik GPS setiap kali kamu memotret satwa, supaya temuanmu muncul di peta.",
                     actionLabel = "Izinkan Lokasi",
                     onAction = { locationPermission.request() },
                     permanentlyDenied = locationPermission.permanentlyDenied,
@@ -240,25 +269,48 @@ fun MapScreen(
         }
 
         // Keep the last selection around so the card doesn't blank out during its exit animation.
-        var lastSelected by remember { mutableStateOf<AnimalSighting?>(null) }
-        if (state.selected != null) lastSelected = state.selected
+        var lastSelection by remember { mutableStateOf<MapSelection?>(null) }
+        if (state.selection != null) lastSelection = state.selection
         AnimatedVisibility(
-            visible = state.selected != null,
+            visible = state.selection != null,
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = slideInVertically(tween(250)) { it / 2 } + fadeIn(tween(250)),
             exit = slideOutVertically(tween(200)) { it / 2 } + fadeOut(tween(200)),
         ) {
-            val s = lastSelected
-            if (s != null) {
-                SightingPreviewCard(
-                    sighting = s,
-                    onDetail = { onOpenDetail(s.id) },
-                    onRoute = { context.openDirections(s.latitude, s.longitude, s.animalLabel) },
-                    onFavorite = { viewModel.toggleFavorite(s.id) },
-                    modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = BottomBarSpace + 8.dp),
+            val cardModifier = Modifier.padding(horizontal = 16.dp).padding(bottom = BottomBarSpace + 8.dp)
+            when (val sel = lastSelection) {
+                is MapSelection.Own -> {
+                    val s = sel.sighting
+                    SightingPreviewCard(
+                        sighting = s,
+                        onDetail = { onOpenDetail(s.id) },
+                        onRoute = { context.openDirections(s.latitude, s.longitude, s.animalLabel) },
+                        onFavorite = { viewModel.toggleFavorite(s.id) },
+                        modifier = cardModifier,
+                    )
+                }
+                is MapSelection.Community -> {
+                    val s = sel.sighting
+                    CommunityPreviewCard(
+                        sighting = s,
+                        onDetail = { onOpenCommunity(s.id) },
+                        onRoute = { context.openDirections(s.latitude, s.longitude, s.animalLabel) },
+                        modifier = cardModifier,
+                    )
+                }
+                is MapSelection.Live -> LiveUserCard(
+                    user = sel.user,
+                    here = state.lastFix,
+                    onRoute = { context.openDirections(sel.user.latitude, sel.user.longitude, sel.user.name) },
+                    modifier = cardModifier,
                 )
+                null -> Unit
             }
         }
+    }
+
+    if (state.online && !state.settings.publicNoticeSeen) {
+        PublicNoticeDialog(onAcknowledge = viewModel::acknowledgePublicNotice)
     }
 }
 
@@ -341,4 +393,153 @@ private fun DimensionToggle(threeD: Boolean, onClick: () -> Unit) {
             color = if (threeD) c.onPrimary else c.brand,
         )
     }
+}
+
+@Composable
+private fun CommunityPreviewCard(
+    sighting: CommunitySighting,
+    onDetail: () -> Unit,
+    onRoute: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = FaunaryTheme.colors
+    FaunaryCard(modifier.fillMaxWidth(), onClick = onDetail, shape = RoundedCornerShape(26.dp)) {
+        Box(Modifier.align(Alignment.CenterHorizontally).size(width = 36.dp, height = 4.dp).clip(CircleShape).background(c.border))
+        Spacer(Modifier.height(12.dp))
+        Row {
+            PhotoThumb(sighting.photoUrl, Modifier.size(104.dp), RoundedCornerShape(18.dp), sighting.animalLabel)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Pill(sighting.animalCategory.displayName, color = c.badgeInfo, icon = sighting.animalCategory.icon)
+                    if (sighting.isAiDetected) Pill("${Format.percent(sighting.confidence)} cocok", icon = Icons.Rounded.AutoAwesome)
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(sighting.animalLabel, style = MaterialTheme.typography.titleLarge, color = c.foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                InfoRow(Icons.Rounded.Person, "Ditemukan oleh ${sighting.displayName}", color = c.info)
+                Spacer(Modifier.height(4.dp))
+                InfoRow(Icons.Rounded.LocationOn, sighting.locationName ?: Format.coordinates(sighting.latitude, sighting.longitude))
+                Spacer(Modifier.height(2.dp))
+                InfoRow(Icons.Rounded.Schedule, Format.relative(sighting.takenAtMs))
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FaunaryButton("Rute ke Sini", onRoute, Modifier.weight(1f), kind = ButtonKind.Secondary, icon = Icons.Rounded.Directions, height = 46.dp)
+            FaunaryButton("Buka Detail", onDetail, Modifier.weight(1f), trailingIcon = Icons.AutoMirrored.Rounded.ArrowForward, height = 46.dp)
+        }
+    }
+}
+
+@Composable
+private fun LiveUserCard(user: LiveUser, here: GeoPoint?, onRoute: () -> Unit, modifier: Modifier = Modifier) {
+    val c = FaunaryTheme.colors
+    FaunaryCard(modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(52.dp).clip(CircleShape).background(c.secondary.copy(alpha = 0.25f)).border(2.dp, c.secondary, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(user.name.take(1).uppercase(), style = MaterialTheme.typography.titleLarge, color = c.foreground)
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(user.name, style = MaterialTheme.typography.titleLarge, color = c.foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(c.success))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Sedang menjelajah · ${Format.relative(user.seenAt)}", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
+                }
+                here?.let {
+                    Text(
+                        "${Format.distance(Geo.distanceMeters(it.latitude, it.longitude, user.latitude, user.longitude))} darimu",
+                        style = MaterialTheme.typography.labelMedium, color = c.foregroundMuted,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        FaunaryButton("Rute ke Sini", onRoute, Modifier.fillMaxWidth(), kind = ButtonKind.Secondary, icon = Icons.Rounded.Directions, height = 46.dp)
+    }
+}
+
+/** Layer switcher: own finds, community finds, live explorers + the user's own live-sharing toggle. */
+@Composable
+private fun LayersButton(
+    layers: MapLayers,
+    liveCount: Int,
+    shareLive: Boolean,
+    onLayers: (MapLayers) -> Unit,
+    onShareLive: (Boolean) -> Unit,
+) {
+    val c = FaunaryTheme.colors
+    var open by remember { mutableStateOf(false) }
+    Box {
+        SurfaceIconButton(Icons.Rounded.Layers, "Lapisan peta", { open = true })
+        if (liveCount > 0) {
+            Text(
+                "$liveCount",
+                style = MaterialTheme.typography.labelSmall,
+                color = c.onPrimary,
+                modifier = Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp)
+                    .clip(CircleShape).background(c.secondary).padding(horizontal = 5.dp, vertical = 1.dp),
+            )
+        }
+        DropdownMenu(open, { open = false }, shape = RoundedCornerShape(18.dp), containerColor = c.surface) {
+            Text("Tampilkan di peta", style = MaterialTheme.typography.labelMedium, color = c.foregroundMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+            LayerItem("Temuan saya", c.primary, layers.own) { onLayers(layers.copy(own = it)) }
+            LayerItem("Temuan komunitas", c.info, layers.community) { onLayers(layers.copy(community = it)) }
+            LayerItem("Penjelajah online ($liveCount)", c.secondary, layers.live) { onLayers(layers.copy(live = it)) }
+            HorizontalDivider(color = c.border)
+            DropdownMenuItem(
+                text = {
+                    Column {
+                        Text("Bagikan lokasi live saya", color = c.foreground)
+                        Text("Hanya saat aplikasi terbuka", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
+                    }
+                },
+                trailingIcon = {
+                    Switch(
+                        checked = shareLive,
+                        onCheckedChange = onShareLive,
+                        colors = SwitchDefaults.colors(checkedThumbColor = c.onPrimary, checkedTrackColor = c.primary),
+                    )
+                },
+                onClick = { onShareLive(!shareLive) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun LayerItem(label: String, dot: androidx.compose.ui.graphics.Color, checked: Boolean, onChange: (Boolean) -> Unit) {
+    val c = FaunaryTheme.colors
+    DropdownMenuItem(
+        text = { Text(label, color = c.foreground) },
+        leadingIcon = { Box(Modifier.size(12.dp).clip(CircleShape).background(dot)) },
+        trailingIcon = {
+            Checkbox(checked, onChange, colors = CheckboxDefaults.colors(checkedColor = c.primary, checkmarkColor = c.onPrimary))
+        },
+        onClick = { onChange(!checked) },
+    )
+}
+
+@Composable
+private fun PublicNoticeDialog(onAcknowledge: () -> Unit) {
+    val c = FaunaryTheme.colors
+    AlertDialog(
+        onDismissRequest = {},
+        containerColor = c.surface,
+        shape = RoundedCornerShape(28.dp),
+        icon = { Icon(Icons.Rounded.Public, null, tint = c.primary) },
+        title = { Text("Temuanmu tampil di peta publik", color = c.foreground) },
+        text = {
+            Text(
+                "Setiap satwa yang kamu simpan, termasuk foto, jenis hewan, catatan, dan titik lokasinya, akan terlihat oleh semua pengguna Faunary. " +
+                    "Hindari memotret di rumah atau tempat pribadi. Lokasi live-mu tidak dibagikan kecuali kamu menyalakannya sendiri.",
+                color = c.foregroundSecondary,
+            )
+        },
+        confirmButton = { FaunaryButton("Saya Mengerti", onAcknowledge, height = 44.dp) },
+    )
 }

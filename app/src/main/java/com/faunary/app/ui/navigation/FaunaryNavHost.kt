@@ -26,6 +26,7 @@ import androidx.navigation.toRoute
 import com.faunary.app.ui.camera.CameraScreen
 import com.faunary.app.ui.components.FloatingBottomBar
 import com.faunary.app.ui.components.MainTab
+import com.faunary.app.ui.detail.CommunityDetailScreen
 import com.faunary.app.ui.detail.DetailScreen
 import com.faunary.app.ui.gallery.GalleryScreen
 import com.faunary.app.ui.journal.JournalScreen
@@ -73,7 +74,12 @@ fun FaunaryNavHost(navController: NavHostController = rememberNavController()) {
         ) {
             composable<MapRoute> { entry ->
                 val focus = entry.toRoute<MapRoute>().focusId.takeIf { it != NO_ID }
-                MapScreen(focusId = focus, onOpenDetail = openDetail, onOpenCamera = openCamera)
+                MapScreen(
+                    focusId = focus,
+                    onOpenDetail = openDetail,
+                    onOpenCommunity = { navController.navigate(CommunityDetailRoute(it)) },
+                    onOpenCamera = openCamera,
+                )
             }
             composable<GalleryRoute> { GalleryScreen(onOpenDetail = openDetail, onOpenCamera = openCamera) }
             composable<JournalRoute> { JournalScreen(onOpenDetail = openDetail, onOpenCamera = openCamera) }
@@ -121,6 +127,12 @@ fun FaunaryNavHost(navController: NavHostController = rememberNavController()) {
                     },
                     onEditLocation = { start -> navController.navigate(LocationPickerRoute(start)) },
                 )
+            }
+            composable<CommunityDetailRoute>(
+                enterTransition = { slideInHorizontally(tween(250)) { it / 4 } + fadeIn(tween(250)) },
+                popExitTransition = { slideOutHorizontally(tween(200)) { it / 4 } + fadeOut(tween(200)) },
+            ) {
+                CommunityDetailScreen(onBack = { navController.popBackStack() })
             }
             composable<LocationPickerRoute> { entry ->
                 LocationPickerScreen(

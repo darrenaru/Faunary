@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.CenterFocusStrong
+import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Directions
 import androidx.compose.material.icons.rounded.Edit
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.GpsFixed
 import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.PinDrop
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Verified
@@ -60,7 +62,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.faunary.app.BuildConfig
 import com.faunary.app.data.AnimalSighting
+import com.faunary.app.data.SyncState
 import com.faunary.app.domain.AnimalCategory
 import com.faunary.app.domain.SpeciesCatalog
 import com.faunary.app.ui.components.ButtonKind
@@ -195,6 +199,10 @@ private fun DetailContent(
             if (s.wasCorrected) Pill("Dikoreksi dari \"${s.aiLabel}\"", icon = Icons.Rounded.AutoFixHigh, color = c.badgeInfo)
             if (!s.isAiDetected) Pill("Label manual", icon = Icons.Rounded.Edit, color = c.badgeSoft)
             Pill(s.animalCategory.displayName, leading = s.animalCategory.emoji, color = c.badgeNature)
+            if (BuildConfig.SUPABASE_URL.isNotBlank()) {
+                if (s.syncState == SyncState.SYNCED) Pill("Publik di peta", icon = Icons.Rounded.Public, color = c.badgeInfo)
+                else Pill("Menunggu unggah", icon = Icons.Rounded.CloudUpload, color = c.badgeSoft)
+            }
         }
 
         if (s.detections.size > 1) {
@@ -301,7 +309,10 @@ private fun DetailContent(
             shape = RoundedCornerShape(28.dp),
             icon = { Icon(Icons.Rounded.DeleteOutline, null, tint = c.danger) },
             title = { Text("Hapus temuan?", color = c.foreground) },
-            text = { Text("Foto, lokasi, dan catatan untuk ${s.animalLabel} akan dihapus permanen dari perangkat ini.", color = c.foregroundSecondary) },
+            text = {
+                val where = if (BuildConfig.SUPABASE_URL.isNotBlank()) "dari perangkat ini dan dari peta publik" else "dari perangkat ini"
+                Text("Foto, lokasi, dan catatan untuk ${s.animalLabel} akan dihapus permanen $where.", color = c.foregroundSecondary)
+            },
             confirmButton = {
                 FaunaryButton("Hapus", { confirmDelete = false; viewModel.delete(onBack) }, kind = ButtonKind.Danger, height = 44.dp)
             },

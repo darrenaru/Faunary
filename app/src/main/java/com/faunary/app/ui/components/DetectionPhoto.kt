@@ -45,6 +45,9 @@ import com.faunary.app.util.Format
 import java.io.File
 import kotlin.math.roundToInt
 
+/** Accepts either a local file path or a remote (https) URL. */
+fun photoModel(pathOrUrl: String): Any = if (pathOrUrl.startsWith("http")) pathOrUrl else File(pathOrUrl)
+
 val AnimalCategory.icon: ImageVector
     get() = when (this) {
         AnimalCategory.BIRD -> Icons.Rounded.FlutterDash
@@ -77,7 +80,7 @@ fun DetectionPhoto(
             .background(c.surfaceMuted),
     ) {
         AsyncImage(
-            model = File(photoPath),
+            model = photoModel(photoPath),
             contentDescription = detections.firstOrNull()?.label ?: "Foto satwa",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -127,7 +130,7 @@ fun PhotoThumb(
     contentDescription: String? = null,
 ) {
     AsyncImage(
-        model = File(photoPath),
+        model = photoModel(photoPath),
         contentDescription = contentDescription,
         contentScale = ContentScale.Crop,
         modifier = modifier.clip(shape).background(FaunaryTheme.colors.surfaceMuted),

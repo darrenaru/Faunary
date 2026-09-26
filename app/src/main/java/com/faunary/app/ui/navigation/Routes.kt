@@ -24,6 +24,10 @@ data class ReviewRoute(val photoPath: String, val exif: String? = null)
 @Serializable
 data class DetailRoute(val id: Long)
 
+/** Someone else's sighting, by server id. */
+@Serializable
+data class CommunityDetailRoute(val id: String)
+
 /** [start] is an optional "lat,lng" to centre the picker on. */
 @Serializable
 data class LocationPickerRoute(val start: String? = null)

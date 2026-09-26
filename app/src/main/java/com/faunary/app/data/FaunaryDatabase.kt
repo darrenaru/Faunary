@@ -1,5 +1,6 @@
 package com.faunary.app.data
 
+import androidx.room.AutoMigration
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Delete
@@ -45,9 +46,29 @@ interface SightingDao {
 
     @Delete
     suspend fun delete(sighting: AnimalSighting)
+
+    @Query("SELECT * FROM animal_sightings WHERE syncState != 1")
+    suspend fun unsynced(): List<AnimalSighting>
+
+    @Query("UPDATE animal_sightings SET remoteId = :remoteId, syncState = :state WHERE id = :id")
+    suspend fun markSynced(id: Long, remoteId: String, state: Int = SyncState.SYNCED)
+
+    @Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
+    suspend fun addPendingDelete(pending: PendingDelete)
+
+    @Query("SELECT * FROM pending_deletes")
+    suspend fun pendingDeletes(): List<PendingDelete>
+
+    @Query("DELETE FROM pending_deletes WHERE remoteId = :remoteId")
+    suspend fun clearPendingDelete(remoteId: String)
 }
 
-@Database(entities = [AnimalSighting::class], version = 1, exportSchema = true)
+@Database(
+    entities = [AnimalSighting::class, PendingDelete::class],
+    version = 2,
+    exportSchema = true,
+    autoMigrations = [AutoMigration(from = 1, to = 2)],
+)
 @TypeConverters(Converters::class)
 abstract class FaunaryDatabase : RoomDatabase() {
     abstract fun sightingDao(): SightingDao

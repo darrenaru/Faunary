@@ -26,6 +26,9 @@ android {
 
         // Mapbox SDK reads this string resource automatically.
         resValue("string", "mapbox_access_token", localProps.getProperty("MAPBOX_ACCESS_TOKEN", ""))
+        // Online features are disabled (app stays local-only) when these are blank.
+        buildConfigField("String", "SUPABASE_URL", "\"${localProps.getProperty("SUPABASE_URL", "")}\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${localProps.getProperty("SUPABASE_ANON_KEY", "")}\"")
     }
 
     buildTypes {
@@ -92,6 +95,19 @@ dependencies {
     implementation(libs.mapbox)
 
     implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+
+    implementation(platform(libs.supabase.bom))
+    implementation(libs.supabase.auth)
+    implementation(libs.supabase.postgrest)
+    implementation(libs.supabase.storage)
+    implementation(libs.supabase.realtime)
+    implementation(libs.ktor.client.okhttp)
+
+    implementation(libs.work.runtime)
+    implementation(libs.hilt.work)
+    ksp(libs.hilt.work.compiler)
+    implementation(libs.lifecycle.process)
     implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)

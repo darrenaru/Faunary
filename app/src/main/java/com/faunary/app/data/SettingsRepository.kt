@@ -18,6 +18,10 @@ data class Settings(
     val explorerName: String = "Penjelajah",
     /** Terrain + extruded buildings + tilted camera. Off by default: it costs more battery/data. */
     val map3D: Boolean = false,
+    /** Opt-in: publish position to other users while the app is open. */
+    val shareLiveLocation: Boolean = false,
+    /** Whether the "your sightings are public" notice was acknowledged. */
+    val publicNoticeSeen: Boolean = false,
 )
 
 @Singleton
@@ -33,6 +37,8 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         minConfidence = prefs.getFloat(KEY_MIN_CONFIDENCE, 0.5f),
         explorerName = prefs.getString(KEY_NAME, null) ?: "Penjelajah",
         map3D = prefs.getBoolean(KEY_MAP_3D, false),
+        shareLiveLocation = prefs.getBoolean(KEY_SHARE_LIVE, false),
+        publicNoticeSeen = prefs.getBoolean(KEY_PUBLIC_NOTICE, false),
     )
 
     fun setThemeMode(mode: ThemeMode) {
@@ -55,10 +61,22 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         _settings.value = read()
     }
 
+    fun setShareLiveLocation(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_SHARE_LIVE, enabled) }
+        _settings.value = read()
+    }
+
+    fun markPublicNoticeSeen() {
+        prefs.edit { putBoolean(KEY_PUBLIC_NOTICE, true) }
+        _settings.value = read()
+    }
+
     private companion object {
         const val KEY_THEME = "theme_mode"
         const val KEY_MIN_CONFIDENCE = "min_confidence"
         const val KEY_NAME = "explorer_name"
         const val KEY_MAP_3D = "map_3d"
+        const val KEY_SHARE_LIVE = "share_live_location"
+        const val KEY_PUBLIC_NOTICE = "public_notice_seen"
     }
 }

@@ -41,6 +41,20 @@ Setiap temuan otomatis dibagikan ke peta publik. Peta juga menampilkan temuan pe
    ```
    Gunakan hanya kunci **anon/publishable**. Keamanan data diatur oleh Row Level Security. Kunci `service_role` jangan pernah ditaruh di aplikasi.
 
+## Rilis & pembaruan otomatis
+
+Aplikasi yang sudah terpasang mengecek `app-releases/latest.json` di Supabase saat dibuka dan setiap 12 jam. Pembaruan diunduh sebagai *patch* (hanya bagian yang berubah, biasanya beberapa MB). Secara default unduhan hanya berjalan lewat Wi-Fi, lalu diverifikasi SHA-256 dan dipasang setelah pengguna mengetuk **Pasang**.
+
+```bash
+# butuh kunci service_role hanya di mesin rilis, jangan pernah dimasukkan ke aplikasi
+export FAUNARY_SERVICE_ROLE_KEY=...
+python tools/release.py --notes "Catatan pembaruan"
+```
+
+Skrip ini menaikkan `version.properties`, membangun APK release per ABI (arm64-v8a dan armeabi-v7a, sekitar 25 MB), membuat patch dari 4 versi terakhir, lalu mengunggah semuanya.
+
+**Penting:** setiap rilis harus ditandatangani dengan kunci yang sama (default `~/.android/debug.keystore`, bisa diganti lewat `SIGNING_*` di `local.properties`). Simpan cadangan file kunci tersebut. Kalau kunci hilang, semua pengguna harus uninstall sebelum bisa memperbarui.
+
 ## Struktur
 
 ```
@@ -50,6 +64,7 @@ app/src/main/java/com/faunary/app/
 ├── ml/          AnimalDetector (ML Kit)
 ├── location/    GPS + reverse geocoding
 ├── remote/      Supabase: auth anonim, sinkronisasi, data komunitas, lokasi live
+├── update/      Pembaruan otomatis: manifest, unduhan patch, verifikasi, PackageInstaller
 └── ui/
     ├── map/       Peta koleksi (home), wrapper Mapbox, marker
     ├── camera/    Kamera in-app + impor dari galeri

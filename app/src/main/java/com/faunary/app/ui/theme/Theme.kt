@@ -3,6 +3,7 @@ package com.faunary.app.ui.theme
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -71,8 +72,10 @@ fun FaunaryTheme(
             colorScheme = schemeFor(colors),
             typography = FaunaryTypography,
             shapes = FaunaryShapes,
-            content = content,
-        )
+        ) {
+            // Bare Text() reads LocalTextStyle, which is the platform default font unless provided.
+            ProvideTextStyle(FaunaryTypography.bodyMedium, content)
+        }
     }
 }
 

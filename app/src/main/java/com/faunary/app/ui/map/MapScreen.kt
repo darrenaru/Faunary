@@ -62,6 +62,9 @@ import androidx.compose.material3.SwitchDefaults
 import com.faunary.app.location.GeoPoint
 import com.faunary.app.remote.CommunitySighting
 import com.faunary.app.util.Geo
+import com.faunary.app.update.UpdateCard
+import com.faunary.app.update.UpdateViewModel
+import com.faunary.app.update.rememberInstallAction
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -113,7 +116,11 @@ fun MapScreen(
     onOpenCommunity: (String) -> Unit,
     onOpenCamera: () -> Unit,
     viewModel: MapViewModel = hiltViewModel(),
+    updateViewModel: UpdateViewModel = hiltViewModel(),
 ) {
+    val update by updateViewModel.state.collectAsStateWithLifecycle()
+    val updateDismissed by updateViewModel.bannerDismissed.collectAsStateWithLifecycle()
+    val installUpdate = rememberInstallAction(updateViewModel)
     val state by viewModel.state.collectAsStateWithLifecycle()
     val routeUi by viewModel.route.collectAsStateWithLifecycle()
     val c = FaunaryTheme.colors
@@ -229,6 +236,18 @@ fun MapScreen(
                         }
                     }
                 }
+            }
+            AnimatedVisibility(
+                visible = update.hasUpdate && !updateDismissed && (update.ready || update.downloading || update.waitingForWifi),
+                enter = fadeIn(tween(200)), exit = fadeOut(tween(150)),
+            ) {
+                UpdateCard(
+                    state = update,
+                    onInstall = installUpdate,
+                    onDownloadNow = updateViewModel::downloadNow,
+                    onDismiss = { updateViewModel.bannerDismissed.value = true },
+                    modifier = Modifier.padding(start = 16.dp, end = 76.dp, top = 12.dp),
+                )
             }
         }
 

@@ -28,6 +28,7 @@ import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -63,6 +64,9 @@ import com.faunary.app.data.SightingRepository
 import com.faunary.app.data.ThemeMode
 import com.faunary.app.domain.CollectionStats
 import com.faunary.app.remote.SupabaseProvider
+import com.faunary.app.update.UpdateCard
+import com.faunary.app.update.UpdateViewModel
+import com.faunary.app.update.rememberInstallAction
 import com.faunary.app.ui.components.ButtonKind
 import com.faunary.app.ui.components.FaunaryButton
 import com.faunary.app.ui.components.FaunaryCard
@@ -149,8 +153,13 @@ class ProfileViewModel @Inject constructor(
 }
 
 @Composable
-fun ProfileScreen(viewModel: ProfileViewModel = hiltViewModel()) {
+fun ProfileScreen(
+    viewModel: ProfileViewModel = hiltViewModel(),
+    updateViewModel: UpdateViewModel = hiltViewModel(),
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val update by updateViewModel.state.collectAsStateWithLifecycle()
+    val installUpdate = rememberInstallAction(updateViewModel)
     val c = FaunaryTheme.colors
     val context = LocalContext.current
     var editName by rememberSaveable { mutableStateOf(false) }
@@ -274,6 +283,42 @@ fun ProfileScreen(viewModel: ProfileViewModel = hiltViewModel()) {
                 "Ekspor JSON", { viewModel.export(context) }, Modifier.fillMaxWidth(),
                 kind = ButtonKind.Secondary, icon = Icons.Rounded.FileDownload, enabled = state.stats.total > 0, height = 46.dp,
             )
+        }
+
+        FaunaryCard {
+            SettingTitle(
+                Icons.Rounded.SystemUpdate, "Pembaruan aplikasi",
+                "Versi ${BuildConfig.VERSION_NAME}" + when {
+                    BuildConfig.DEBUG -> " · build pengembangan"
+                    update.hasUpdate -> " · versi ${update.availableVersion} tersedia"
+                    update.lastChecked > 0 -> " · sudah terbaru"
+                    else -> ""
+                },
+            )
+            if (update.hasUpdate) {
+                Spacer(Modifier.height(12.dp))
+                UpdateCard(update, onInstall = installUpdate, onDownloadNow = updateViewModel::downloadNow)
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Unduh lewat data seluler", style = MaterialTheme.typography.titleSmall, color = c.foreground)
+                    Text("Nonaktif: pembaruan hanya diunduh saat terhubung Wi-Fi.", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    checked = update.allowMobileData,
+                    onCheckedChange = updateViewModel::setAllowMobileData,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = c.onPrimary, checkedTrackColor = c.primary,
+                        uncheckedThumbColor = c.foregroundMuted, uncheckedTrackColor = c.surfaceMuted, uncheckedBorderColor = c.border,
+                    ),
+                )
+            }
+            if (!BuildConfig.DEBUG) {
+                Spacer(Modifier.height(10.dp))
+                FaunaryButton("Cek Pembaruan", updateViewModel::checkNow, Modifier.fillMaxWidth(), kind = ButtonKind.Ghost, height = 44.dp)
+            }
         }
 
         FaunaryCard {

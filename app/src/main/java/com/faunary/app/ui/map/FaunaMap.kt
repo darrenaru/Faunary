@@ -21,6 +21,7 @@ import com.faunary.app.domain.AnimalCategory
 import com.faunary.app.location.GeoPoint
 import com.faunary.app.remote.Bounds
 import com.faunary.app.ui.theme.FaunaryTheme
+import com.mapbox.bindgen.Value
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.EdgeInsets
@@ -250,6 +251,16 @@ fun FaunaMap(
                     }
                 }
             }
+        }
+    }
+
+    // Cluster count labels ("3") use Inter like the rest of the map; re-applied after each style load.
+    LaunchedEffect(managers, darkTheme, threeD) {
+        if (managers.isEmpty()) return@LaunchedEffect
+        val style = mapView.mapboxMap.style ?: return@LaunchedEffect
+        val font = Value(listOf(Value("Inter Bold"), Value("Arial Unicode MS Bold")))
+        style.styleLayers.map { it.id }.filter { "-cluster-text-layer-" in it }.forEach { id ->
+            style.setStyleLayerProperty(id, "text-font", font)
         }
     }
 

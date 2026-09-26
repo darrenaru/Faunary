@@ -13,6 +13,10 @@ val localProps = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 
+val versionProps = Properties().apply {
+    rootProject.file("version.properties").inputStream().use { load(it) }
+}
+
 android {
     namespace = "com.faunary.app"
     compileSdk = 37
@@ -21,8 +25,8 @@ android {
         applicationId = "com.faunary.app"
         minSdk = 24
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = versionProps.getProperty("VERSION_CODE").toInt()
+        versionName = versionProps.getProperty("VERSION_NAME")
 
         // Mapbox SDK reads this string resource automatically.
         resValue("string", "mapbox_access_token", localProps.getProperty("MAPBOX_ACCESS_TOKEN", ""))
@@ -31,12 +35,44 @@ android {
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${localProps.getProperty("SUPABASE_ANON_KEY", "")}\"")
     }
 
+    signingConfigs {
+        // Updates only install over an app signed with the same key, so releases reuse the key
+        // the first builds were signed with. Keep a backup of this keystore: losing it means
+        // every user has to uninstall before they can update.
+        create("shared") {
+            storeFile = file(localProps.getProperty("SIGNING_STORE_FILE", "${System.getProperty("user.home")}/.android/debug.keystore"))
+            storePassword = localProps.getProperty("SIGNING_STORE_PASSWORD", "android")
+            keyAlias = localProps.getProperty("SIGNING_KEY_ALIAS", "androiddebugkey")
+            keyPassword = localProps.getProperty("SIGNING_KEY_PASSWORD", "android")
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("shared")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            signingConfig = signingConfigs.getByName("shared")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+    }
+
+    // One small APK per CPU family instead of a 190 MB universal one; the updater picks the right one.
+    splits {
+        abi {
+            isEnable = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
+        }
+    }
+
+    packaging {
+        // Compressed native libs keep each APK under the 50 MB storage limit; unchanged libs
+        // compress to identical bytes, so update patches stay small.
+        jniLibs.useLegacyPackaging = true
     }
 
     compileOptions {
@@ -108,6 +144,8 @@ dependencies {
     implementation(libs.hilt.work)
     ksp(libs.hilt.work.compiler)
     implementation(libs.lifecycle.process)
+    implementation(libs.jbsdiff)
+    implementation(libs.commons.compress)
     implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)

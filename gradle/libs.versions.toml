@@ -25,6 +25,8 @@ supabase = "3.8.0"
 ktor = "3.5.1"
 work = "2.12.0"
 hiltWork = "1.4.0"
+jbsdiff = "1.0"
+commonsCompress = "1.28.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -79,6 +81,8 @@ work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work"
 hilt-work = { module = "androidx.hilt:hilt-work", version.ref = "hiltWork" }
 hilt-work-compiler = { module = "androidx.hilt:hilt-compiler", version.ref = "hiltWork" }
 lifecycle-process = { module = "androidx.lifecycle:lifecycle-process", version.ref = "lifecycle" }
+jbsdiff = { module = "io.sigpipe:jbsdiff", version.ref = "jbsdiff" }
+commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commonsCompress" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]

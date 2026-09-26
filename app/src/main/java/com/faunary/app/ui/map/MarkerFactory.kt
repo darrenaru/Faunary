@@ -10,7 +10,10 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.os.Build
 import android.util.LruCache
+import androidx.core.content.res.ResourcesCompat
+import com.faunary.app.R
 import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
@@ -28,6 +31,12 @@ import kotlin.math.min
  */
 class MarkerFactory(private val context: Context, private val density: Float) {
     private val cache = LruCache<String, Bitmap>(160)
+
+    /** Inter (variable font) at a bold weight; falls back to the system bold if it can't load. */
+    private val interBold: Typeface by lazy {
+        val base = runCatching { ResourcesCompat.getFont(context, R.font.inter) }.getOrNull() ?: return@lazy Typeface.DEFAULT_BOLD
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) Typeface.create(base, 700, false) else Typeface.create(base, Typeface.BOLD)
+    }
 
     suspend fun marker(marker: MapMarker, selected: Boolean, dark: Boolean): Bitmap {
         val cacheKey = "${marker.kind}|${marker.photo}|${marker.category}|${marker.label}|$selected|$dark"
@@ -95,7 +104,7 @@ class MarkerFactory(private val context: Context, private val density: Float) {
         val avatar = (if (selected) 44f else 36f) * density
         val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = 11f * density
-            typeface = Typeface.DEFAULT_BOLD
+            typeface = interBold
             color = if (dark) 0xFFF5EDE0.toInt() else 0xFF4A3023.toInt()
         }
         val shortName = if (name.length > 14) name.take(13) + "…" else name
@@ -120,7 +129,7 @@ class MarkerFactory(private val context: Context, private val density: Float) {
         })
         val initial = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = avatar * 0.45f
-            typeface = Typeface.DEFAULT_BOLD
+            typeface = interBold
             textAlign = Paint.Align.CENTER
             color = if (dark) 0xFFF5EDE0.toInt() else 0xFF7A4E28.toInt()
         }

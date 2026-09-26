@@ -29,6 +29,17 @@ data class DetailRoute(val id: Long)
 @Serializable
 data class CommunityDetailRoute(val id: String)
 
+/** Likes and comments on the user's finds. */
+@Serializable
+data object NotificationsRoute
+
+/** What a tapped system notification asks the app to open. */
+sealed interface NotificationOpen {
+    /** [sightingId] is the server id; [notificationId] is marked read. */
+    data class Sighting(val sightingId: String, val notificationId: String?) : NotificationOpen
+    data object Inbox : NotificationOpen
+}
+
 /** [start] is an optional "lat,lng" to centre the picker on. */
 @Serializable
 data class LocationPickerRoute(val start: String? = null)

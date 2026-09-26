@@ -35,6 +35,9 @@ interface SightingDao {
     @Query("SELECT * FROM animal_sightings WHERE id = :id")
     suspend fun get(id: Long): AnimalSighting?
 
+    @Query("SELECT id FROM animal_sightings WHERE remoteId = :remoteId LIMIT 1")
+    suspend fun idForRemote(remoteId: String): Long?
+
     @Query("SELECT * FROM animal_sightings ORDER BY timestamp DESC")
     suspend fun getAll(): List<AnimalSighting>
 

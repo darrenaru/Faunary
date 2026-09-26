@@ -1,5 +1,6 @@
 package com.faunary.app.ui.gallery
 
+import com.faunary.app.ui.components.icon
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -131,7 +132,7 @@ fun GalleryScreen(
                 AnimalCategory.entries.forEach { cat ->
                     val n = state.counts[cat] ?: 0
                     if (n > 0) item(cat.name) {
-                        SelectableChip(cat.displayName, f.category == cat, { viewModel.setCategory(if (f.category == cat) null else cat) }, leading = cat.emoji, count = n)
+                        SelectableChip(cat.displayName, f.category == cat, { viewModel.setCategory(if (f.category == cat) null else cat) }, icon = cat.icon, count = n)
                     }
                 }
             }
@@ -347,7 +348,7 @@ private fun ListCard(s: AnimalSighting, here: GeoPoint?, onClick: () -> Unit) {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Pill(s.animalCategory.displayName, color = c.badgeNature, leading = s.animalCategory.emoji)
+                    Pill(s.animalCategory.displayName, color = c.badgeNature, icon = s.animalCategory.icon)
                     if (s.isFavorite) Icon(Icons.Rounded.Favorite, null, Modifier.size(16.dp).align(Alignment.CenterVertically), tint = c.primary)
                 }
                 Spacer(Modifier.height(4.dp))

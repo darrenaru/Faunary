@@ -50,9 +50,11 @@ fun photoModel(pathOrUrl: String): Any = if (pathOrUrl.startsWith("http")) pathO
 
 val AnimalCategory.icon: ImageVector
     get() = when (this) {
+        AnimalCategory.CAT -> FaunaryIcons.Cat
+        AnimalCategory.DOG -> FaunaryIcons.Dog
         AnimalCategory.BIRD -> Icons.Rounded.FlutterDash
         AnimalCategory.WILD -> Icons.Rounded.EmojiNature
-        else -> Icons.Rounded.Pets
+        AnimalCategory.OTHER -> Icons.Rounded.Pets
     }
 
 /**

@@ -199,12 +199,22 @@ private fun DetailContent(
             if (s.isAiDetected) Pill("Akurasi AI ${Format.percent(s.confidence)}", icon = Icons.Rounded.Verified)
             if (s.wasCorrected) Pill("Dikoreksi dari \"${s.aiLabel}\"", icon = Icons.Rounded.AutoFixHigh, color = c.badgeInfo)
             if (!s.isAiDetected) Pill("Label manual", icon = Icons.Rounded.Edit, color = c.badgeSoft)
-            Pill(s.animalCategory.displayName, leading = s.animalCategory.emoji, color = c.badgeNature)
+            Pill(s.animalCategory.displayName, icon = s.animalCategory.icon, color = c.badgeNature)
             if (BuildConfig.SUPABASE_URL.isNotBlank()) {
                 if (s.syncState == SyncState.SYNCED) Pill("Publik di peta", icon = Icons.Rounded.Public, color = c.badgeInfo)
                 else Pill("Menunggu unggah", icon = Icons.Rounded.CloudUpload, color = c.badgeSoft)
             }
         }
+
+        Spacer(Modifier.height(16.dp))
+        val social by viewModel.social.state.collectAsStateWithLifecycle()
+        SocialSection(
+            state = social,
+            onToggleLike = viewModel.social::toggleLike,
+            onSend = viewModel.social::send,
+            onDelete = viewModel.social::delete,
+            onRetry = { viewModel.social.retry() },
+        )
 
         if (s.detections.size > 1) {
             Spacer(Modifier.height(16.dp))
@@ -356,7 +366,7 @@ private fun EditLabelDialog(s: AnimalSighting, onDismiss: () -> Unit, onSave: (S
                 Spacer(Modifier.height(12.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     AnimalCategory.entries.forEach { cat ->
-                        SelectableChip(cat.displayName, category == cat, { category = cat }, leading = cat.emoji)
+                        SelectableChip(cat.displayName, category == cat, { category = cat }, icon = cat.icon)
                     }
                 }
             }

@@ -8,14 +8,21 @@ import android.location.Address
 import android.location.Geocoder
 import android.os.Build
 import androidx.core.content.ContextCompat
+import android.os.Looper
 import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -55,6 +62,38 @@ class LocationRepository @Inject constructor(
         val loc = fresh ?: runCatching { fused.lastLocation.await() }.getOrNull() ?: return null
         return GeoPoint(loc.latitude, loc.longitude, if (loc.hasAccuracy()) loc.accuracy else null)
             .also { _lastFix.value = it }
+    }
+
+    /** Last position the system already knows (instant, may be a few minutes old); null if none. */
+    @SuppressLint("MissingPermission")
+    suspend fun lastKnown(): GeoPoint? {
+        if (!hasPermission()) return null
+        val loc = runCatching { fused.lastLocation.await() }.getOrNull() ?: return null
+        return GeoPoint(loc.latitude, loc.longitude, if (loc.hasAccuracy()) loc.accuracy else null)
+            .also { _lastFix.value = it }
+    }
+
+    /** Continuous high-accuracy fixes (used while navigating); stops when the collector goes away. */
+    @SuppressLint("MissingPermission")
+    fun updates(intervalMs: Long = 1_000): Flow<GeoPoint> = callbackFlow {
+        if (!hasPermission()) {
+            close()
+            return@callbackFlow
+        }
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMs)
+            .setMinUpdateIntervalMillis(intervalMs / 2)
+            .build()
+        val callback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                result.lastLocation?.let {
+                    val p = GeoPoint(it.latitude, it.longitude, if (it.hasAccuracy()) it.accuracy else null)
+                    _lastFix.value = p
+                    trySend(p)
+                }
+            }
+        }
+        fused.requestLocationUpdates(request, callback, Looper.getMainLooper())
+        awaitClose { fused.removeLocationUpdates(callback) }
     }
 
     suspend fun reverseGeocode(lat: Double, lng: Double): Place? {

@@ -1,5 +1,6 @@
 package com.faunary.app.ui.review
 
+import com.faunary.app.ui.components.icon
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.RepeatMode
@@ -200,7 +201,7 @@ fun ReviewScreen(
             @OptIn(ExperimentalLayoutApi::class)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 AnimalCategory.entries.forEach { cat ->
-                    SelectableChip(cat.displayName, state.category == cat, { viewModel.setCategory(cat) }, leading = cat.emoji)
+                    SelectableChip(cat.displayName, state.category == cat, { viewModel.setCategory(cat) }, icon = cat.icon)
                 }
             }
             Spacer(Modifier.height(20.dp))

@@ -18,6 +18,9 @@ class SightingRepository @Inject constructor(
 
     fun observe(id: Long): Flow<AnimalSighting?> = dao.observe(id)
 
+    /** Local id of an uploaded entry, from its server id. */
+    suspend fun idForRemote(remoteId: String): Long? = dao.idForRemote(remoteId)
+
     suspend fun getAll(): List<AnimalSighting> = dao.getAll()
 
     suspend fun add(sighting: AnimalSighting): Long =

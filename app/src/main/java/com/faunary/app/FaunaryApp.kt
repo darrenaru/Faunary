@@ -3,6 +3,7 @@ package com.faunary.app
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.faunary.app.notify.InteractionNotifier
 import com.faunary.app.remote.LiveLocationSharer
 import com.faunary.app.remote.SyncScheduler
 import com.faunary.app.update.UpdateScheduler
@@ -16,6 +17,7 @@ class FaunaryApp : Application(), Configuration.Provider {
     @Inject lateinit var syncScheduler: SyncScheduler
     @Inject lateinit var liveLocationSharer: LiveLocationSharer
     @Inject lateinit var updateScheduler: UpdateScheduler
+    @Inject lateinit var interactionNotifier: InteractionNotifier
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
@@ -26,5 +28,6 @@ class FaunaryApp : Application(), Configuration.Provider {
         syncScheduler.schedule()
         liveLocationSharer.start()
         updateScheduler.start()
+        interactionNotifier.start()
     }
 }

@@ -46,6 +46,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import com.faunary.app.remote.CommunityRepository
 import com.faunary.app.remote.CommunitySighting
+import com.faunary.app.remote.SocialRepository
 import com.faunary.app.ui.components.ButtonKind
 import com.faunary.app.ui.components.DetectionPhoto
 import com.faunary.app.ui.components.EmptyState
@@ -75,19 +76,23 @@ sealed interface CommunityDetailState {
 class CommunityDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     repository: CommunityRepository,
+    socialRepository: SocialRepository,
 ) : ViewModel() {
     private val id = savedStateHandle.toRoute<CommunityDetailRoute>().id
     private val _state = MutableStateFlow<CommunityDetailState>(CommunityDetailState.Loading)
     val state = _state.asStateFlow()
+    val social = SightingSocial(socialRepository, viewModelScope)
 
     init {
         viewModelScope.launch {
-            _state.value = repository.sighting(id)?.let { CommunityDetailState.Ready(it) } ?: CommunityDetailState.Missing
+            val sighting = repository.sighting(id)
+            _state.value = sighting?.let { CommunityDetailState.Ready(it) } ?: CommunityDetailState.Missing
+            if (sighting != null) social.bind(sighting.id, moderator = false)
         }
     }
 }
 
-/** Read-only view of someone else's sighting. */
+/** Someone else's sighting: read-only details, plus likes and comments. */
 @Composable
 fun CommunityDetailScreen(
     onBack: () -> Unit,
@@ -103,14 +108,19 @@ fun CommunityDetailScreen(
                 EmptyState(Icons.Rounded.CloudOff, "Temuan tidak tersedia", "Mungkin sudah dihapus pemiliknya, atau kamu sedang offline.")
                 FaunaryButton("Kembali", onBack, Modifier.align(Alignment.CenterHorizontally), kind = ButtonKind.Ghost)
             }
-            is CommunityDetailState.Ready -> Content(s.sighting, onBack, onRoute)
+            is CommunityDetailState.Ready -> Content(s.sighting, viewModel, onBack, onRoute)
         }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Content(s: CommunitySighting, onBack: () -> Unit, onRoute: (Double, Double, String) -> Unit) {
+private fun Content(
+    s: CommunitySighting,
+    viewModel: CommunityDetailViewModel,
+    onBack: () -> Unit,
+    onRoute: (Double, Double, String) -> Unit,
+) {
     val c = FaunaryTheme.colors
     Column(
         Modifier
@@ -150,8 +160,18 @@ private fun Content(s: CommunitySighting, onBack: () -> Unit, onRoute: (Double, 
         Spacer(Modifier.height(12.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (s.isAiDetected) Pill("Akurasi AI ${Format.percent(s.confidence)}", icon = Icons.Rounded.Verified)
-            Pill(s.animalCategory.displayName, leading = s.animalCategory.emoji, color = c.badgeNature)
+            Pill(s.animalCategory.displayName, icon = s.animalCategory.icon, color = c.badgeNature)
         }
+
+        Spacer(Modifier.height(16.dp))
+        val social by viewModel.social.state.collectAsStateWithLifecycle()
+        SocialSection(
+            state = social,
+            onToggleLike = viewModel.social::toggleLike,
+            onSend = viewModel.social::send,
+            onDelete = viewModel.social::delete,
+            onRetry = { viewModel.social.retry() },
+        )
         Spacer(Modifier.height(16.dp))
 
         FaunaryCard {

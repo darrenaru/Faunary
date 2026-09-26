@@ -3,6 +3,7 @@
 
     python tools/release.py --notes "Perbaikan peta dan rute"
     python tools/release.py --notes "..." --version-name 0.4.0
+    python tools/release.py --notes "..." --mandatory     # older versions must update first
 
 Steps: bump version.properties -> assembleRelease (one APK per ABI) -> for each of the last few
 published versions, build a bsdiff patch (jbsdiff, the same library the app uses to apply it) ->
@@ -112,6 +113,8 @@ def main():
     ap.add_argument("--notes", required=True, help="Catatan rilis yang tampil di aplikasi")
     ap.add_argument("--version-name", help="Default: naikkan angka terakhir, mis. 0.2.0 -> 0.2.1")
     ap.add_argument("--no-bump", action="store_true", help="Pakai versi saat ini (mis. mengulang upload)")
+    ap.add_argument("--mandatory", action="store_true",
+                    help="Pembaruan wajib: versi yang lebih lama diblokir sampai memperbarui")
     args = ap.parse_args()
 
     local = read_props(ROOT / "local.properties")
@@ -153,7 +156,10 @@ def main():
         history = history[:KEEP_HISTORY]
 
     work = ROOT / "build" / "release-cache"
-    manifest = {"versionCode": code, "versionName": name, "notes": args.notes, "abis": {}, "history": history}
+    # Once a release is mandatory, later optional releases keep that floor.
+    min_code = code if args.mandatory else (current or {}).get("minVersionCode", 0)
+    manifest = {"versionCode": code, "versionName": name, "notes": args.notes, "minVersionCode": min_code,
+                "abis": {}, "history": history}
     for abi in ABIS:
         apk = ROOT / "app" / "build" / "outputs" / "apk" / "release" / f"app-{abi}-release.apk"
         if not apk.exists():
@@ -189,7 +195,8 @@ def main():
         sys.exit("Tidak ada APK release yang ditemukan.")
     storage.upload("latest.json", json.dumps(manifest, indent=2, ensure_ascii=False).encode("utf-8"),
                    "application/json", cache="no-cache, max-age=0")
-    print(f"==> Terbit: {name} (code {code}). Aplikasi akan menemukannya saat dibuka / dalam 12 jam.")
+    kind = "WAJIB" if min_code >= code else "opsional"
+    print(f"==> Terbit ({kind}): {name} (code {code}). Aplikasi akan menemukannya saat dibuka / dalam 12 jam.")
 
 
 if __name__ == "__main__":

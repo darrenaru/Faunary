@@ -1,5 +1,6 @@
 package com.faunary.app.ui.map
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -48,7 +49,49 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.CircularProgressIndicator
+import com.faunary.app.location.DeviceOrientation
+import com.faunary.app.location.RouteStep
+import com.faunary.app.location.deviceOrientation
+import com.faunary.app.location.hasOrientationSensor
+import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.NotificationsNone
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.withFrameMillis
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.snapshotFlow
+import kotlin.math.exp
 import com.faunary.app.location.TravelMode
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.Flag
+import androidx.compose.material.icons.rounded.ForkLeft
+import androidx.compose.material.icons.rounded.ForkRight
+import androidx.compose.material.icons.rounded.Merge
+import androidx.compose.material.icons.rounded.MyLocation
+import androidx.compose.material.icons.rounded.Navigation
+import androidx.compose.material.icons.rounded.RoundaboutLeft
+import androidx.compose.material.icons.rounded.RoundaboutRight
+import androidx.compose.material.icons.rounded.Straight
+import androidx.compose.material.icons.rounded.TurnLeft
+import androidx.compose.material.icons.rounded.TurnRight
+import androidx.compose.material.icons.rounded.TurnSharpLeft
+import androidx.compose.material.icons.rounded.TurnSharpRight
+import androidx.compose.material.icons.rounded.TurnSlightLeft
+import androidx.compose.material.icons.rounded.TurnSlightRight
+import androidx.compose.material.icons.rounded.UTurnRight
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import com.faunary.app.ui.components.IconBadge
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
@@ -83,6 +126,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.semantics.Role
+import kotlin.math.roundToInt
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
@@ -95,7 +141,6 @@ import com.faunary.app.ui.components.ButtonKind
 import com.faunary.app.ui.components.CategoryAvatar
 import com.faunary.app.ui.components.FaunaryButton
 import com.faunary.app.ui.components.FaunaryCard
-import com.faunary.app.ui.components.GpsChip
 import com.faunary.app.ui.components.InfoRow
 import com.faunary.app.ui.components.LocateButton
 import com.faunary.app.ui.components.PermissionCard
@@ -110,6 +155,11 @@ import com.faunary.app.util.Format
 import com.faunary.app.util.LocationPermissions
 import com.faunary.app.util.rememberPermissionState
 
+/** Launch intro: whole-globe start (a little west of Indonesia, so the globe turns on the way in). */
+private val IntroGlobeCenter = GeoPoint(5.0, 70.0)
+private const val INTRO_GLOBE_ZOOM = 0.6
+private const val INTRO_FLIGHT_MS = 4_500L
+
 /** Space reserved at the bottom for the floating navigation bar. */
 val BottomBarSpace = 104.dp
 
@@ -121,6 +171,9 @@ fun MapScreen(
     onOpenDetail: (Long) -> Unit,
     onOpenCommunity: (String) -> Unit,
     onOpenCamera: () -> Unit,
+    onNavigatingChange: (Boolean) -> Unit = {},
+    unreadNotifications: Int = 0,
+    onOpenNotifications: () -> Unit = {},
     viewModel: MapViewModel = hiltViewModel(),
     updateViewModel: UpdateViewModel = hiltViewModel(),
 ) {
@@ -143,13 +196,91 @@ fun MapScreen(
         }
     }
 
+    // Turn-by-turn navigation: camera follows the user until they pan the map themselves.
+    val navigating = routeUi?.navigating == true
+    var following by remember { mutableStateOf(true) }
+    val windowHeightPx = LocalWindowInfo.current.containerSize.height.toDouble()
+    LaunchedEffect(navigating) {
+        following = true
+        onNavigatingChange(navigating)
+    }
+    DisposableEffect(Unit) { onDispose { onNavigatingChange(false) } }
+    val view = LocalView.current
+    DisposableEffect(navigating) {
+        view.keepScreenOn = navigating
+        onDispose { view.keepScreenOn = false }
+    }
+    BackHandler(enabled = navigating) { viewModel.stopNavigation() }
+    // Device-orientation mode: the map turns and tilts with the phone (rotation-vector sensor,
+    // i.e. gyroscope fused with accelerometer and compass). Off, or without the sensor: route direction.
+    val context = LocalContext.current
+    val hasSensor = remember { hasOrientationSensor(context) }
+    var useDeviceHeading by rememberSaveable { mutableStateOf(true) }
+    val deviceMode = hasSensor && useDeviceHeading
+    val navFix by rememberUpdatedState(routeUi?.position)
+    val navProgress by rememberUpdatedState(routeUi?.progress)
+    val navZoom = if (routeUi?.mode == TravelMode.DRIVING) 16.5 else 17.5
+    // Phone orientation, ~50×/s while the map is on screen: turns the location arrow and, in
+    // navigation, the camera. A StateFlow read every frame, so it never recomposes the screen.
+    val orientation = remember { MutableStateFlow<DeviceOrientation?>(null) }
+    val declinationAt by rememberUpdatedState(routeUi?.position ?: state.lastFix)
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(hasSensor, locationPermission.granted) {
+        if (!hasSensor || !locationPermission.granted) return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            deviceOrientation(context) { declinationAt }.collect { orientation.value = it }
+        }
+    }
+    // Camera loop, one step per frame: glides to each GPS fix and follows the phone's rotation/tilt in real time.
+    LaunchedEffect(navigating, following, deviceMode) {
+        if (!navigating || !following) return@LaunchedEffect
+        var cam: NavCamera? = null
+        var last = withFrameMillis { it }
+        while (isActive) {
+            val now = withFrameMillis { it }
+            val dt = ((now - last) / 1000.0).coerceIn(0.0, 0.1)
+            last = now
+            val fix = navFix ?: continue
+            val c = cam ?: controller.navigationCamera() ?: continue
+            val o = orientation.value
+            val targetBearing = if (deviceMode && o != null) o.heading else navProgress?.bearing ?: c.bearing
+            val targetPitch = if (deviceMode && o != null) tiltToPitch(o.tilt) else NavigationPitch
+            val move = 1 - exp(-dt * 4.0) // position/zoom: smooth glide between 1 s GPS fixes
+            val turn = 1 - exp(-dt * 12.0) // rotation/tilt: fast, just enough to hide sensor jitter
+            val next = NavCamera(
+                latitude = c.latitude + (fix.latitude - c.latitude) * move,
+                longitude = c.longitude + (fix.longitude - c.longitude) * move,
+                zoom = c.zoom + (navZoom - c.zoom) * move,
+                bearing = (c.bearing + angleDelta(c.bearing, targetBearing) * turn + 360.0) % 360.0,
+                pitch = c.pitch + (targetPitch - c.pitch) * turn,
+            )
+            controller.setNavigationCamera(next, topPaddingPx = windowHeightPx * 0.42)
+            cam = next
+        }
+    }
+
     // Opened from a detail screen's "Rute" button: draw that route straight away.
     LaunchedEffect(routeTo) {
         routeTo?.let { (lat, lng) -> viewModel.startRoute(lat, lng, routeLabel ?: "Tujuan") }
     }
 
+    // Launch intro: open on the whole globe, then fly down to the user (once per app launch;
+    // skipped when the map was opened for a specific entry or route).
+    val playIntro = remember { focusId == null && routeTo == null && viewModel.camera == null && viewModel.takeIntro() }
+    LaunchedEffect(playIntro) {
+        if (!playIntro) return@LaunchedEffect
+        delay(700) // let the globe draw before it starts moving
+        val target = if (locationPermission.granted) viewModel.introTarget() else null
+        val fallback = if (target == null) {
+            snapshotFlow { state.loaded }.first { it }
+            state.all.firstOrNull()?.let { GeoPoint(it.latitude, it.longitude) }
+        } else null
+        val dest = target ?: fallback ?: DefaultCenter
+        controller.flyTo(dest.latitude, dest.longitude, if (target != null) 16.0 else 13.5, durationMs = INTRO_FLIGHT_MS)
+    }
+
     // Centre the camera once when data first arrives: focused entry > latest entry > GPS.
-    var centered by rememberSaveable { mutableStateOf(viewModel.camera != null) }
+    var centered by rememberSaveable { mutableStateOf(viewModel.camera != null || playIntro) }
     LaunchedEffect(state.loaded) {
         if (!state.loaded || centered || routeTo != null) return@LaunchedEffect
         centered = true
@@ -180,65 +311,60 @@ fun MapScreen(
                 }
             },
             onCameraIdle = viewModel::onCameraIdle,
-            route = routeUi?.route?.points,
+            route = if (navigating) routeUi?.remaining ?: routeUi?.route?.points else routeUi?.route?.points,
+            fitRoute = !navigating,
+            heading = orientation,
+            onUserPan = { if (navigating) following = false },
             routeTopPadding = 190.dp,
             routeBottomPadding = BottomBarSpace + 250.dp,
             onMapClick = {
                 viewModel.select(null)
                 clusterList = null
             },
-            onClusterClick = { kind, lat, lng, radius ->
+            onStackClick = { keys, lat, lng ->
                 viewModel.select(null)
-                val items = viewModel.clusterItems(kind, lat, lng, radius)
+                val items = viewModel.selectionsFor(keys)
                 clusterList = if (items.isNotEmpty()) ClusterList(lat, lng, items) else null
-                controller.flyTo(lat, lng, bottomPaddingPx = cardPaddingPx)
+                // Keep the zoom: the list shows everything, and "Perbesar peta" spreads them out.
+                controller.flyTo(lat, lng, controller.zoom() ?: 15.0, cardPaddingPx)
             },
             showUserLocation = locationPermission.granted,
             ornamentBottomPadding = if (state.selection != null || clusterList != null || routeUi != null) 0.dp else BottomBarSpace,
             darkTheme = c.isDark,
-            threeD = state.map3D,
-            initialCenter = viewModel.camera?.first ?: DefaultCenter,
-            initialZoom = viewModel.camera?.second ?: 14.0,
+            // Navigation always uses the 3D map (terrain + buildings); the user's 2D/3D choice returns afterwards.
+            threeD = state.map3D || navigating,
+            initialCenter = viewModel.camera?.first ?: if (playIntro) IntroGlobeCenter else DefaultCenter,
+            initialZoom = viewModel.camera?.second ?: if (playIntro) INTRO_GLOBE_ZOOM else 14.0,
             onCameraSnapshot = { center, zoom -> viewModel.camera = center to zoom },
             modifier = Modifier.fillMaxSize(),
         )
 
         // Header + filters
-        Column(Modifier.fillMaxWidth().statusBarsPadding().padding(top = 8.dp)) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Row(
-                    Modifier
-                        .softShadow(RoundedCornerShape(18.dp), 4.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(c.surface)
-                        .padding(start = 6.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(c.primary), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Pets, null, Modifier.size(20.dp), tint = c.onPrimary)
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    Column {
-                        Text("Faunary", style = MaterialTheme.typography.titleMedium, color = c.foreground)
-                        Text("Peta koleksi", style = MaterialTheme.typography.labelMedium, color = c.foregroundSecondary)
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                GpsChip(state.lastFix?.accuracy?.takeIf { locationPermission.granted })
-            }
-            Spacer(Modifier.height(12.dp))
+        if (!navigating) Column(Modifier.fillMaxWidth().statusBarsPadding().padding(top = 8.dp)) {
+            MapHeader(
+                gpsAccuracy = state.lastFix?.accuracy?.takeIf { locationPermission.granted },
+                visibleCount = state.filter?.let { state.counts[it] ?: 0 } ?: state.totalCount,
+                filter = state.filter,
+                showBell = state.online,
+                unread = unreadNotifications,
+                onBell = onOpenNotifications,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            Spacer(Modifier.height(10.dp))
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 item {
-                    SelectableChip("Semua", state.filter == null, { viewModel.setFilter(null) }, icon = Icons.Rounded.Pets, count = state.totalCount)
+                    CategoryFilterChip("Semua", Icons.Rounded.Apps, state.totalCount, state.filter == null) { viewModel.setFilter(null) }
                 }
                 AnimalCategory.entries.forEach { cat ->
                     val count = state.counts[cat] ?: 0
                     if (count > 0 || cat != AnimalCategory.OTHER) {
                         item(cat.name) {
-                            SelectableChip(cat.displayName, state.filter == cat, { viewModel.setFilter(if (state.filter == cat) null else cat) }, leading = cat.emoji, count = count)
+                            CategoryFilterChip(cat.displayName, cat.icon, count, state.filter == cat) {
+                                viewModel.setFilter(if (state.filter == cat) null else cat)
+                            }
                         }
                     }
                 }
@@ -258,7 +384,7 @@ fun MapScreen(
         }
 
         // Map controls
-        Column(
+        if (!navigating) Column(
             Modifier.align(Alignment.CenterEnd).padding(end = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -365,7 +491,7 @@ fun MapScreen(
     }
 
     AnimatedVisibility(
-        visible = routeUi != null,
+        visible = routeUi != null && !navigating,
         enter = slideInVertically(tween(250)) { it / 2 } + fadeIn(tween(250)),
         exit = slideOutVertically(tween(200)) { it / 2 } + fadeOut(tween(200)),
     ) {
@@ -376,8 +502,45 @@ fun MapScreen(
                     onMode = viewModel::setRouteMode,
                     onRefresh = viewModel::refreshRoute,
                     onGrant = { locationPermission.request() },
+                    onStart = viewModel::startNavigation,
                     onClose = viewModel::clearRoute,
                     modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = BottomBarSpace + 8.dp),
+                )
+            }
+        }
+    }
+
+    // Turn-by-turn: next manoeuvre on top, trip summary at the bottom.
+    AnimatedVisibility(
+        visible = navigating,
+        enter = fadeIn(tween(250)), exit = fadeOut(tween(200)),
+    ) {
+        routeUi?.let { r ->
+            Box(Modifier.fillMaxSize()) {
+                if (!r.arrived) {
+                    NavigationBanner(r, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp))
+                }
+                Column(
+                    Modifier.align(Alignment.CenterEnd).padding(end = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    MapRoundIconButton(
+                        if (r.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
+                        if (r.muted) "Nyalakan suara panduan" else "Matikan suara panduan",
+                        { viewModel.setMuted(!r.muted) },
+                    )
+                    if (hasSensor) {
+                        OrientationToggle(on = useDeviceHeading, onClick = { useDeviceHeading = !useDeviceHeading })
+                    }
+                    if (!following) {
+                        MapRoundIconButton(Icons.Rounded.MyLocation, "Ikuti posisiku", { following = true })
+                    }
+                }
+                NavigationPanel(
+                    route = r,
+                    onEnd = viewModel::stopNavigation,
+                    onDone = viewModel::clearRoute,
+                    modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = 16.dp).padding(bottom = 12.dp),
                 )
             }
         }
@@ -400,7 +563,8 @@ fun MapScreen(
                     },
                     onZoom = {
                         clusterList = null
-                        controller.flyTo(cluster.latitude, cluster.longitude, 17.5)
+                        // Frame every photo of the stack (a single spot zooms right in).
+                        controller.fit(cluster.items.map { it.latLng })
                     },
                     modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = BottomBarSpace + 8.dp),
                 )
@@ -630,6 +794,7 @@ private fun RouteCard(
     onMode: (TravelMode) -> Unit,
     onRefresh: () -> Unit,
     onGrant: () -> Unit,
+    onStart: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -662,14 +827,18 @@ private fun RouteCard(
                 Spacer(Modifier.width(10.dp))
                 Text("Menghitung rute…", style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary)
             }
-            route.route != null -> Row(verticalAlignment = Alignment.Bottom) {
-                Text(Format.duration(route.route.durationSeconds), style = MaterialTheme.typography.headlineMedium, color = c.foreground)
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    Format.distance(route.route.distanceMeters) + " · " + route.mode.label.lowercase(),
-                    style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                )
+            route.route != null -> Column {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(Format.duration(route.route.durationSeconds), style = MaterialTheme.typography.headlineMedium, color = c.foreground)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        Format.distance(route.route.distanceMeters) + " · " + route.mode.label.lowercase(),
+                        style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                FaunaryButton("Mulai Navigasi", onStart, Modifier.fillMaxWidth(), icon = Icons.Rounded.Navigation, height = 46.dp)
             }
             else -> Column {
                 Text(route.error ?: "Rute tidak tersedia.", style = MaterialTheme.typography.bodyMedium, color = c.danger)
@@ -681,3 +850,237 @@ private fun RouteCard(
         }
     }
 }
+
+/** Icon for a Mapbox manoeuvre (type + modifier). Indonesia drives on the left, so U-turns go right. */
+private fun maneuverIcon(step: RouteStep?): ImageVector {
+    val m = step?.modifier.orEmpty()
+    val left = "left" in m
+    return when {
+        step == null || step.type == "arrive" -> Icons.Rounded.Flag
+        step.type.startsWith("roundabout") || step.type == "rotary" -> if (left) Icons.Rounded.RoundaboutLeft else Icons.Rounded.RoundaboutRight
+        step.type == "fork" -> if (left) Icons.Rounded.ForkLeft else Icons.Rounded.ForkRight
+        step.type == "merge" -> Icons.Rounded.Merge
+        m == "uturn" -> Icons.Rounded.UTurnRight
+        m == "sharp left" -> Icons.Rounded.TurnSharpLeft
+        m == "sharp right" -> Icons.Rounded.TurnSharpRight
+        m == "slight left" -> Icons.Rounded.TurnSlightLeft
+        m == "slight right" -> Icons.Rounded.TurnSlightRight
+        m == "left" -> Icons.Rounded.TurnLeft
+        m == "right" -> Icons.Rounded.TurnRight
+        else -> Icons.Rounded.Straight
+    }
+}
+
+/** Next manoeuvre: arrow, distance to it and the instruction. */
+@Composable
+private fun NavigationBanner(route: RouteUi, modifier: Modifier = Modifier) {
+    val c = FaunaryTheme.colors
+    val p = route.progress
+    FaunaryCard(modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), color = c.primary) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(56.dp).clip(RoundedCornerShape(16.dp)).background(c.onPrimary.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (p == null || route.rerouting) {
+                    CircularProgressIndicator(Modifier.size(26.dp), color = c.onPrimary, strokeWidth = 2.5.dp)
+                } else {
+                    Icon(maneuverIcon(p.nextStep), null, Modifier.size(36.dp), tint = c.onPrimary)
+                }
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                when {
+                    route.rerouting -> Text("Menghitung ulang rute…", style = MaterialTheme.typography.titleMedium, color = c.onPrimary)
+                    p == null -> Text("Mencari posisimu…", style = MaterialTheme.typography.titleMedium, color = c.onPrimary)
+                    else -> {
+                        Text(Format.distance(p.distanceToNextStep), style = MaterialTheme.typography.headlineSmall, color = c.onPrimary)
+                        Text(
+                            p.nextStep?.instruction ?: "Menuju ${route.label}",
+                            style = MaterialTheme.typography.bodyLarge, color = c.onPrimary.copy(alpha = 0.9f),
+                            maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Remaining time, distance and arrival clock; becomes an arrival card at the destination. */
+@Composable
+private fun NavigationPanel(route: RouteUi, onEnd: () -> Unit, onDone: () -> Unit, modifier: Modifier = Modifier) {
+    val c = FaunaryTheme.colors
+    val p = route.progress
+    FaunaryCard(modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp)) {
+        if (route.arrived) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconBadge(Icons.Rounded.Flag, background = c.highlight)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Kamu telah tiba", style = MaterialTheme.typography.titleMedium, color = c.foreground)
+                    Text(route.label, style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            FaunaryButton("Selesai", onDone, Modifier.fillMaxWidth(), height = 46.dp)
+            return@FaunaryCard
+        }
+        val seconds = p?.remainingSeconds ?: route.route?.durationSeconds ?: 0.0
+        val meters = p?.remainingMeters ?: route.route?.distanceMeters ?: 0.0
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(Format.duration(seconds), style = MaterialTheme.typography.headlineMedium, color = c.foreground)
+                Text(
+                    "${Format.distance(meters)} · tiba ${Format.time(System.currentTimeMillis() + (seconds * 1000).toLong())}",
+                    style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary,
+                )
+            }
+            FaunaryButton("Akhiri", onEnd, kind = ButtonKind.Danger, icon = Icons.Rounded.Close, height = 46.dp)
+        }
+    }
+}
+
+/** Phone lying flat (0°) → moderate 3D view; held upright (90°) → looking far ahead. Never flat: navigation is 3D. */
+private fun tiltToPitch(tilt: Double): Double = (45.0 + tilt / 90.0 * 30.0).coerceIn(45.0, 75.0)
+
+/** Shortest signed turn from [from] to [to], in degrees (-180…180). */
+private fun angleDelta(from: Double, to: Double): Double = ((to - from + 540.0) % 360.0) - 180.0
+
+/** Compass toggle: filled while the map follows the phone's rotation and tilt. */
+@Composable
+private fun OrientationToggle(on: Boolean, onClick: () -> Unit) {
+    val c = FaunaryTheme.colors
+    val bg by animateColorAsState(if (on) c.primary else c.surface, tween(200), label = "orientBg")
+    val fg by animateColorAsState(if (on) c.onPrimary else c.primary, tween(200), label = "orientFg")
+    MapRoundButton(
+        contentDescription = if (on) "Arah peta mengikuti rute" else "Arah peta mengikuti gerakan HP",
+        onClick = onClick,
+        background = bg,
+    ) {
+        Icon(Icons.Rounded.Explore, null, Modifier.size(24.dp), tint = fg)
+    }
+}
+
+/**
+ * Top of the map: one floating card with the brand, a live status line (GPS accuracy + how many
+ * finds are on the map, following the active filter) and the notification bell.
+ */
+@Composable
+private fun MapHeader(
+    gpsAccuracy: Float?,
+    visibleCount: Int,
+    filter: AnimalCategory?,
+    showBell: Boolean,
+    unread: Int,
+    onBell: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = FaunaryTheme.colors
+    val shape = RoundedCornerShape(24.dp)
+    Row(
+        modifier
+            .fillMaxWidth()
+            .softShadow(shape, 6.dp)
+            .clip(shape)
+            .background(c.surface)
+            .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(44.dp).clip(RoundedCornerShape(15.dp)).background(c.primary), contentAlignment = Alignment.Center) {
+            Icon(Icons.Rounded.Pets, null, Modifier.size(24.dp), tint = c.onPrimary)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Faunary", style = MaterialTheme.typography.titleMedium, color = c.foreground, maxLines = 1)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val gpsOn = gpsAccuracy != null
+                Box(Modifier.size(7.dp).clip(CircleShape).background(if (gpsOn) c.success else c.foregroundMuted))
+                Spacer(Modifier.width(5.dp))
+                val what = filter?.displayName?.lowercase() ?: "temuan"
+                Text(
+                    (if (gpsOn) "GPS ${gpsAccuracy.roundToInt()}m" else "GPS mati") + " · $visibleCount $what di peta",
+                    style = MaterialTheme.typography.labelMedium, color = c.foregroundSecondary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (showBell) {
+            Spacer(Modifier.width(8.dp))
+            HeaderBell(unread, onBell)
+        }
+    }
+}
+
+/** Bell inside the header card; the badge shows unread likes/comments. */
+@Composable
+private fun HeaderBell(unread: Int, onClick: () -> Unit) {
+    val c = FaunaryTheme.colors
+    Box {
+        Box(
+            Modifier.size(44.dp).clip(RoundedCornerShape(15.dp)).background(c.surfaceMuted).clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                if (unread > 0) Icons.Rounded.Notifications else Icons.Rounded.NotificationsNone,
+                if (unread > 0) "Notifikasi, $unread belum dibaca" else "Notifikasi",
+                Modifier.size(22.dp), tint = c.brand,
+            )
+        }
+        if (unread > 0) {
+            Box(
+                Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp)
+                    .border(2.dp, c.surface, CircleShape)
+                    .heightIn(min = 20.dp).clip(CircleShape).background(c.primary).padding(horizontal = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(if (unread > 99) "99+" else "$unread", style = MaterialTheme.typography.labelSmall, color = c.onPrimary)
+            }
+        }
+    }
+}
+
+/**
+ * Compact filter chip for the map: category icon in a small disc, name and count. Semi-transparent so the
+ * map shows through; filled Canyon when selected, faded when that category has no finds.
+ */
+@Composable
+private fun CategoryFilterChip(label: String, icon: ImageVector, count: Int, selected: Boolean, onClick: () -> Unit) {
+    val c = FaunaryTheme.colors
+    val bg by animateColorAsState(if (selected) c.primary else c.surface.copy(alpha = 0.92f), tween(200), label = "catBg")
+    val fg by animateColorAsState(if (selected) c.onPrimary else c.foreground, tween(200), label = "catFg")
+    val empty = count == 0 && !selected
+    Row(
+        Modifier
+            .softShadow(CircleShape, if (selected) 5.dp else 2.dp)
+            .clip(CircleShape)
+            .background(bg)
+            .clickable(role = Role.Tab, onClick = onClick)
+            .height(36.dp)
+            .padding(start = 4.dp, end = 12.dp)
+            .alpha(if (empty) 0.55f else 1f),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(28.dp).clip(CircleShape).background(if (selected) c.onPrimary.copy(alpha = 0.2f) else c.surfaceMuted),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, null, Modifier.size(17.dp), tint = if (selected) fg else c.brand)
+        }
+        Spacer(Modifier.width(7.dp))
+        Text(label, style = MaterialTheme.typography.labelLarge, color = fg)
+        Spacer(Modifier.width(6.dp))
+        Text(
+            count.toString(),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) c.onPrimary.copy(alpha = 0.85f) else c.foregroundMuted,
+        )
+    }
+}
+
+private val MapSelection.latLng: Pair<Double, Double>
+    get() = when (this) {
+        is MapSelection.Own -> sighting.latitude to sighting.longitude
+        is MapSelection.Community -> sighting.latitude to sighting.longitude
+        is MapSelection.Live -> user.latitude to user.longitude
+    }

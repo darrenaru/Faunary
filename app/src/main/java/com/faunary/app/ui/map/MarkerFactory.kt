@@ -7,6 +7,7 @@ import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -14,6 +15,13 @@ import android.os.Build
 import android.util.LruCache
 import androidx.core.content.res.ResourcesCompat
 import com.faunary.app.R
+import com.faunary.app.ui.components.icon
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.asAndroidPath
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.VectorGroup
+import androidx.compose.ui.graphics.vector.VectorPath
+import androidx.compose.ui.graphics.vector.toPath
 import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
@@ -23,9 +31,9 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Draws the round map markers:
- * - OWN: photo inside a Canyon ring
- * - COMMUNITY: photo inside a blue ring (other people's finds)
+ * Draws the map markers:
+ * - OWN: photo pin with a Canyon outline and a category-icon badge
+ * - COMMUNITY: slightly smaller photo pin with a blue outline (other people's finds)
  * - LIVE: initial letter in an olive ring with the user's name underneath (pulsed by FaunaMap)
  * Bitmaps are cached, so re-syncing annotations stays cheap.
  */
@@ -38,62 +46,165 @@ class MarkerFactory(private val context: Context, private val density: Float) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) Typeface.create(base, 700, false) else Typeface.create(base, Typeface.BOLD)
     }
 
-    suspend fun marker(marker: MapMarker, selected: Boolean, dark: Boolean): Bitmap {
-        val cacheKey = "${marker.kind}|${marker.photo}|${marker.category}|${marker.label}|$selected|$dark"
+    /** [count] > 1 draws a stack: cards fanned behind the top photo and the count in the badge. */
+    suspend fun marker(marker: MapMarker, selected: Boolean, dark: Boolean, count: Int = 1): Bitmap {
+        val cacheKey = "${marker.kind}|${marker.photo}|${marker.category}|${marker.label}|$selected|$dark|$count"
         cache.get(cacheKey)?.let { return it }
         val bmp = when (marker.kind) {
             MarkerKind.LIVE -> liveMarker(marker.label ?: "?", selected, dark)
-            else -> photoMarker(marker, selected, dark)
+            else -> photoMarker(marker, selected, dark, count)
         }
         cache.put(cacheKey, bmp)
         return bmp
     }
 
-    private suspend fun photoMarker(marker: MapMarker, selected: Boolean, dark: Boolean): Bitmap {
-        val sizeDp = if (selected) 62f else if (marker.kind == MarkerKind.COMMUNITY) 42f else 48f
-        val pad = 6f * density // room for the shadow / halo
-        val diameter = sizeDp * density
-        val full = (diameter + pad * 2).toInt()
-        val bmp = Bitmap.createBitmap(full, full, Bitmap.Config.ARGB_8888)
+    /**
+     * Photo pin: rounded-square photo in a cream frame with a pointed tail whose tip is the
+     * bitmap's bottom-centre (the annotation is anchored there, so the pin stands on its spot).
+     * An accent outline (Canyon = own, blue = community) and a category badge top-right tell the
+     * finds apart; the selected pin is larger with a soft glow.
+     */
+    private suspend fun photoMarker(marker: MapMarker, selected: Boolean, dark: Boolean, count: Int = 1): Bitmap {
+        val d = density
+        val body = (if (selected) 60f else if (marker.kind == MarkerKind.COMMUNITY) 42f else 46f) * d
+        val frame = (if (selected) 3.5f else 3f) * d
+        val tailH = (if (selected) 9f else 7f) * d
+        val tailW = (if (selected) 16f else 13f) * d
+        val badge = (if (selected) 22f else 18f) * d
+        val side = (if (count > 1) 14f else 8f) * d // room for shadow, glow, badge overhang and stacked cards
+        val width = (body + side * 2).toInt()
+        val height = (side + body + tailH).toInt()
+        val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
-        val cx = full / 2f
-        val cy = full / 2f
-        val r = diameter / 2f
 
-        val ringColor = if (marker.kind == MarkerKind.COMMUNITY) 0xFF7395BF.toInt() else 0xFFDF6D41.toInt()
+        val accent = if (marker.kind == MarkerKind.COMMUNITY) 0xFF7395BF.toInt() else 0xFFDF6D41.toInt()
         val surface = if (dark) 0xFF342B25.toInt() else 0xFFFBF8F1.toInt()
+        val cx = width / 2f
+        val rect = RectF(cx - body / 2, side, cx + body / 2, side + body)
+        val corner = body * 0.3f
 
-        if (selected) {
-            canvas.drawCircle(cx, cy, r + 4f * density, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x99F7D89A.toInt() })
+        // Frame + tail as one shape, so outline and shadow run around both.
+        val pin = Path().apply {
+            addRoundRect(rect, corner, corner, Path.Direction.CW)
+            op(Path().apply {
+                moveTo(cx - tailW / 2, rect.bottom - corner / 2)
+                lineTo(cx + tailW / 2, rect.bottom - corner / 2)
+                lineTo(cx, rect.bottom + tailH)
+                close()
+            }, Path.Op.UNION)
         }
-        canvas.drawCircle(cx, cy, r, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        // Stack: one or two cards peeking out behind the top photo, slightly rotated.
+        if (count > 1) {
+            val tilts = if (count == 2) listOf(8f) else listOf(10f, -7f)
+            for (deg in tilts) {
+                canvas.save()
+                canvas.rotate(deg, rect.centerX(), rect.bottom)
+                canvas.drawRoundRect(rect, corner, corner, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = surface
+                    setShadowLayer(3f * d, 0f, 1f * d, 0x334A3023)
+                })
+                canvas.drawRoundRect(rect, corner, corner, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = 1.5f * d
+                    color = (accent and 0x00FFFFFF) or 0x99000000.toInt()
+                })
+                canvas.restore()
+            }
+        }
+        if (selected) {
+            canvas.drawPath(pin, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 7f * d
+                strokeJoin = Paint.Join.ROUND
+                color = (accent and 0x00FFFFFF) or 0x40000000
+            })
+        }
+        canvas.drawPath(pin, Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = surface
-            setShadowLayer(4f * density, 0f, 1.5f * density, 0x334A3023)
-        })
-        val ring = (if (selected) 3.5f else 2.5f) * density
-        canvas.drawCircle(cx, cy, r - ring / 2, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = ring
-            color = ringColor
+            setShadowLayer(5f * d, 0f, 2f * d, 0x404A3023)
         })
 
-        val inner = r - ring - 2f * density
-        val photo = marker.photo?.let { loadSquare(it, (inner * 2).toInt()) }
+        // Photo (or the category icon when there is none), clipped to the inner rounded square.
+        val inner = RectF(rect.left + frame, rect.top + frame, rect.right - frame, rect.bottom - frame)
+        val innerCorner = corner - frame
+        val photo = marker.photo?.let { loadSquare(it, inner.width().toInt()) }
         if (photo != null) {
             val shader = BitmapShader(photo, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
                 setLocalMatrix(Matrix().apply {
-                    val s = (inner * 2) / photo.width
-                    postScale(s, s)
-                    postTranslate(cx - inner, cy - inner)
+                    val scale = inner.width() / photo.width
+                    postScale(scale, scale)
+                    postTranslate(inner.left, inner.top)
                 })
             }
-            canvas.drawCircle(cx, cy, inner, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.shader = shader })
+            canvas.drawRoundRect(inner, innerCorner, innerCorner, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.shader = shader })
         } else {
-            canvas.drawCircle(cx, cy, inner, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFF7D89A.toInt() })
-            val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = inner; textAlign = Paint.Align.CENTER }
-            canvas.drawText(marker.category.emoji, cx, cy - (text.descent() + text.ascent()) / 2, text)
+            canvas.drawRoundRect(inner, innerCorner, innerCorner, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFF7D89A.toInt() })
+            drawIcon(canvas, marker.category.icon, inner.centerX(), inner.centerY(), inner.width() * 0.55f, 0xFF7A4E28.toInt())
+        }
+
+        canvas.drawPath(pin, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (if (selected) 2.5f else 1.5f) * d
+            strokeJoin = Paint.Join.ROUND
+            color = accent
+        })
+
+        // Stack: the number of photos in a badge on the top-right corner.
+        if (count > 1) {
+            val text = if (count > 99) "99+" else count.toString()
+            val label = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                textSize = badge * 0.58f
+                typeface = interBold
+                color = 0xFFFFFFFF.toInt()
+                textAlign = Paint.Align.CENTER
+            }
+            val w = max(badge, label.measureText(text) + 10f * d)
+            val bx = rect.right - 3f * d
+            val by = rect.top + 3f * d
+            val pill = RectF(bx - w / 2, by - badge / 2, bx + w / 2, by + badge / 2)
+            canvas.drawRoundRect(pill, badge / 2, badge / 2, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = surface
+                setShadowLayer(2f * d, 0f, 1f * d, 0x334A3023)
+            })
+            val inset = 1.5f * d
+            val inner2 = RectF(pill.left + inset, pill.top + inset, pill.right - inset, pill.bottom - inset)
+            canvas.drawRoundRect(inner2, inner2.height() / 2, inner2.height() / 2, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent })
+            canvas.drawText(text, bx, by - (label.descent() + label.ascent()) / 2, label)
+        } else if (photo != null) {
+            // Category badge on the top-right corner.
+            val bx = rect.right - 3f * d
+            val by = rect.top + 3f * d
+            canvas.drawCircle(bx, by, badge / 2, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = surface
+                setShadowLayer(2f * d, 0f, 1f * d, 0x334A3023)
+            })
+            canvas.drawCircle(bx, by, badge / 2 - 1.5f * d, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent })
+            drawIcon(canvas, marker.category.icon, bx, by, badge * 0.58f, 0xFFFFFFFF.toInt())
         }
         return bmp
+    }
+
+    /** Draws a Compose [ImageVector] (the category icons) onto a plain Android canvas, centred and tinted. */
+    private fun drawIcon(canvas: Canvas, vector: ImageVector, cx: Float, cy: Float, size: Float, color: Int) {
+        val scale = size / vector.viewportWidth
+        val matrix = Matrix().apply {
+            postScale(scale, scale)
+            postTranslate(cx - size / 2, cy - vector.viewportHeight * scale / 2)
+        }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
+        fun draw(group: VectorGroup) {
+            for (node in group) when (node) {
+                is VectorPath -> {
+                    val path = node.pathData.toPath().asAndroidPath()
+                    path.fillType = if (node.pathFillType == PathFillType.EvenOdd) android.graphics.Path.FillType.EVEN_ODD
+                    else android.graphics.Path.FillType.WINDING
+                    path.transform(matrix)
+                    canvas.drawPath(path, paint)
+                }
+                is VectorGroup -> draw(node)
+            }
+        }
+        draw(vector.root)
     }
 
     /**

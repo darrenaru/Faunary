@@ -1,12 +1,12 @@
 package com.faunary.app.domain
 
 /** Top-level buckets used for map/gallery filters (matches the design's chip row). */
-enum class AnimalCategory(val displayName: String, val emoji: String) {
-    CAT("Kucing", "🐱"),
-    DOG("Anjing", "🐶"),
-    BIRD("Burung", "🐦"),
-    WILD("Satwa Liar", "🦎"),
-    OTHER("Lainnya", "🐾");
+enum class AnimalCategory(val displayName: String) {
+    CAT("Kucing"),
+    DOG("Anjing"),
+    BIRD("Burung"),
+    WILD("Satwa Liar"),
+    OTHER("Lainnya");
 
     companion object {
         fun fromName(name: String?): AnimalCategory =

@@ -10,14 +10,19 @@ import com.faunary.app.domain.AnimalCategory
 import com.faunary.app.location.GeoPoint
 import com.faunary.app.location.LocationRepository
 import com.faunary.app.location.Route
+import com.faunary.app.location.RouteProgress
 import com.faunary.app.location.RouteRepository
+import com.faunary.app.location.RouteTracker
 import com.faunary.app.location.TravelMode
+import com.faunary.app.location.VoiceGuide
 import com.faunary.app.remote.Bounds
 import com.faunary.app.remote.CommunityRepository
 import com.faunary.app.remote.CommunitySighting
 import com.faunary.app.remote.LiveChange
 import com.faunary.app.remote.SightingChange
 import com.faunary.app.util.Geo
+import java.util.Locale
+import kotlin.math.roundToInt
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -53,6 +58,15 @@ data class RouteUi(
     val route: Route? = null,
     val error: String? = null,
     val needsPermission: Boolean = false,
+    /** Turn-by-turn mode: the camera follows the user and prompts are shown/spoken. */
+    val navigating: Boolean = false,
+    val position: GeoPoint? = null,
+    val progress: RouteProgress? = null,
+    /** Route line still ahead of the user while navigating. */
+    val remaining: List<Pair<Double, Double>>? = null,
+    val rerouting: Boolean = false,
+    val arrived: Boolean = false,
+    val muted: Boolean = false,
 )
 
 data class MapLayers(val own: Boolean = true, val community: Boolean = true, val live: Boolean = true)
@@ -78,6 +92,9 @@ fun communityKey(id: String) = "com:$id"
 fun liveKey(id: String) = "live:$id"
 
 private val LIVE_TTL_MS = TimeUnit.MINUTES.toMillis(5)
+/** Within this distance of the destination the trip counts as done. */
+private const val ARRIVE_METERS = 20.0
+private const val REROUTE_COOLDOWN_MS = 15_000L
 
 data class MapUiState(
     val loaded: Boolean = false,
@@ -100,10 +117,10 @@ data class MapUiState(
     val markers: List<MapMarker>
         get() = buildList {
             if (layers.own) visible.forEach {
-                add(MapMarker(ownKey(it.id), it.latitude, it.longitude, it.photoPath, it.animalCategory))
+                add(MapMarker(ownKey(it.id), it.latitude, it.longitude, it.photoPath, it.animalCategory, time = it.timestamp))
             }
             if (layers.community) community.forEach {
-                add(MapMarker(communityKey(it.id), it.latitude, it.longitude, it.photoUrl, it.animalCategory, MarkerKind.COMMUNITY))
+                add(MapMarker(communityKey(it.id), it.latitude, it.longitude, it.photoUrl, it.animalCategory, MarkerKind.COMMUNITY, time = it.takenAtMs))
             }
             if (layers.live) liveUsers.forEach {
                 add(MapMarker(liveKey(it.userId), it.latitude, it.longitude, null, AnimalCategory.OTHER, MarkerKind.LIVE, it.name))
@@ -118,11 +135,18 @@ class MapViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val communityRepo: CommunityRepository,
     private val routes: RouteRepository,
+    private val voice: VoiceGuide,
 ) : ViewModel() {
 
     private val routeState = MutableStateFlow<RouteUi?>(null)
     val route: StateFlow<RouteUi?> = routeState.asStateFlow()
     private var routeJob: Job? = null
+    private var navJob: Job? = null
+    private var tracker: RouteTracker? = null
+    /** Prompts already given, as "<step index>:<far|near>", so each is said once. */
+    private val announced = mutableSetOf<String>()
+    private var offRouteFixes = 0
+    private var lastRerouteAt = 0L
 
     /** Last camera position, so returning to the Map tab doesn't reset the view. */
     var camera: Pair<GeoPoint, Double>? = null
@@ -235,7 +259,9 @@ class MapViewModel @Inject constructor(
 
     fun startRoute(lat: Double, lng: Double, label: String) {
         selectedKey.value = null
-        routeState.value = RouteUi(lat, lng, label, mode = routeState.value?.mode ?: TravelMode.WALKING)
+        stopNavigation()
+        val prev = routeState.value
+        routeState.value = RouteUi(lat, lng, label, mode = prev?.mode ?: TravelMode.WALKING, muted = prev?.muted ?: false)
         fetchRoute()
     }
 
@@ -248,14 +274,122 @@ class MapViewModel @Inject constructor(
     fun refreshRoute() = fetchRoute()
 
     fun clearRoute() {
+        stopNavigation()
         routeJob?.cancel()
         routeState.value = null
     }
 
-    private fun fetchRoute() {
+    /** Switches the drawn route into turn-by-turn navigation from the user's live position. */
+    fun startNavigation() {
+        val current = routeState.value ?: return
+        val r = current.route ?: return
+        if (!location.hasPermission()) return
+        tracker = RouteTracker(r)
+        announced.clear()
+        offRouteFixes = 0
+        routeState.update { it?.copy(navigating = true, arrived = false, rerouting = false, progress = null, remaining = null) }
+        if (!current.muted) {
+            voice.start()
+            val first = r.steps.firstOrNull()?.instruction?.let { " $it." } ?: ""
+            voice.speak("Memulai navigasi ke ${current.label}.$first")
+        }
+        navJob?.cancel()
+        navJob = viewModelScope.launch { location.updates().collect(::onNavigationFix) }
+    }
+
+    /** Leaves turn-by-turn mode; the route stays drawn. */
+    fun stopNavigation() {
+        navJob?.cancel()
+        navJob = null
+        tracker = null
+        voice.stop()
+        routeState.update { it?.copy(navigating = false, position = null, progress = null, remaining = null, rerouting = false, arrived = false) }
+    }
+
+    fun setMuted(muted: Boolean) {
+        routeState.update { it?.copy(muted = muted) }
+        if (muted) voice.stop() else if (routeState.value?.navigating == true) voice.start()
+    }
+
+    private fun onNavigationFix(fix: GeoPoint) {
+        val t = tracker ?: return
+        val current = routeState.value ?: return
+        if (current.arrived) return
+        val p = t.update(fix.latitude, fix.longitude)
+        val walking = current.mode == TravelMode.WALKING
+        val arrived = p.remainingMeters < ARRIVE_METERS ||
+            Geo.distanceMeters(fix.latitude, fix.longitude, current.destLat, current.destLng) < ARRIVE_METERS
+        routeState.update { it?.copy(position = fix, progress = p, remaining = t.remainingPoints(p), arrived = arrived) }
+
+        if (arrived) {
+            say("Kamu telah tiba di ${current.label}.")
+            navJob?.cancel()
+            return
+        }
+
+        // Prompts: once well ahead of a manoeuvre ("Dalam 200 meter, belok kiri…") and once right at it.
+        p.nextStep?.let { step ->
+            val far = if (walking) 60.0 else 400.0
+            val near = if (walking) 15.0 else 60.0
+            val i = p.nextStepIndex
+            when {
+                p.distanceToNextStep <= near -> if (announced.add("$i:near")) {
+                    announced.add("$i:far")
+                    say(step.instruction)
+                }
+                p.distanceToNextStep <= far -> if (announced.add("$i:far")) {
+                    say("Dalam ${spokenDistance(p.distanceToNextStep)}, ${step.instruction.replaceFirstChar { it.lowercase() }}")
+                }
+            }
+        }
+
+        // Off the line for a few fixes in a row (allowing for GPS accuracy): fetch a new route from here.
+        val tolerance = (if (walking) 30.0 else 50.0) + (fix.accuracy ?: 0f).coerceAtMost(30f)
+        offRouteFixes = if (p.offRouteMeters > tolerance) offRouteFixes + 1 else 0
+        val now = System.currentTimeMillis()
+        if (offRouteFixes >= 3 && !current.rerouting && now - lastRerouteAt > REROUTE_COOLDOWN_MS) {
+            lastRerouteAt = now
+            offRouteFixes = 0
+            say("Menghitung ulang rute.")
+            fetchRoute(origin = fix)
+        }
+    }
+
+    private fun say(text: String) {
+        if (routeState.value?.muted != true) voice.speak(text)
+    }
+
+    /** "120 meter", "1,5 kilometer": rounded so prompts sound natural. */
+    private fun spokenDistance(meters: Double): String = when {
+        meters < 1000 -> "${((meters / 10).roundToInt() * 10).coerceAtLeast(10)} meter"
+        else -> String.format(Locale.forLanguageTag("id-ID"), "%.1f kilometer", meters / 1000).replace(",0 ", " ")
+    }
+
+    override fun onCleared() {
+        voice.stop()
+    }
+
+    /** Loads the route; while navigating this is a silent reroute from [origin] that keeps the old line until it succeeds. */
+    private fun fetchRoute(origin: GeoPoint? = null) {
         routeJob?.cancel()
         routeJob = viewModelScope.launch {
             val target = routeState.value ?: return@launch
+            if (target.navigating) {
+                routeState.update { it?.copy(rerouting = true) }
+                val from = origin ?: target.position ?: location.lastFix.value
+                if (from == null) {
+                    routeState.update { it?.copy(rerouting = false) }
+                    return@launch
+                }
+                routes.route(from, target.destLat, target.destLng, target.mode)
+                    .onSuccess { r ->
+                        tracker = RouteTracker(r)
+                        announced.clear()
+                        routeState.update { it?.copy(route = r, rerouting = false) }
+                    }
+                    .onFailure { routeState.update { it?.copy(rerouting = false) } }
+                return@launch
+            }
             routeState.update { it?.copy(loading = true, error = null, needsPermission = false) }
             if (!location.hasPermission()) {
                 routeState.update { it?.copy(loading = false, needsPermission = true, error = "Izinkan lokasi untuk menghitung rute dari posisimu.") }
@@ -274,6 +408,21 @@ class MapViewModel @Inject constructor(
 
     fun hasLocationPermission() = location.hasPermission()
 
+    /** True exactly once per app launch: the map then opens on the globe and flies to the user. */
+    fun takeIntro(): Boolean {
+        if (introPlayed) return false
+        introPlayed = true
+        return true
+    }
+
+    /** Where the intro flight lands: the known position right away, else a fresh GPS fix. */
+    suspend fun introTarget(): GeoPoint? = location.lastKnown() ?: location.currentLocation()
+
+    private companion object {
+        /** Process-wide, so it resets on a cold start but not when returning to the Map tab. */
+        var introPlayed = false
+    }
+
     fun toggle3D() = settings.setMap3D(!settings.settings.value.map3D)
 
     fun acknowledgePublicNotice() = settings.markPublicNoticeSeen()
@@ -288,19 +437,12 @@ class MapViewModel @Inject constructor(
         layers.value = value
     }
 
-    /** Sightings of [kind] around a tapped cluster, nearest first. */
-    fun clusterItems(kind: MarkerKind, lat: Double, lng: Double, radiusMeters: Double): List<MapSelection> {
+    /** The finds behind a tapped stack, in the given (newest first) order. */
+    fun selectionsFor(keys: List<String>): List<MapSelection> {
         val s = state.value
-        data class Hit(val meters: Double, val time: Long, val selection: MapSelection)
-        val hits = when (kind) {
-            MarkerKind.OWN -> s.visible.map { Hit(Geo.distanceMeters(lat, lng, it.latitude, it.longitude), it.timestamp, MapSelection.Own(it)) }
-            MarkerKind.COMMUNITY -> s.community.map { Hit(Geo.distanceMeters(lat, lng, it.latitude, it.longitude), it.takenAtMs, MapSelection.Community(it)) }
-            MarkerKind.LIVE -> emptyList()
-        }
-        // Nearest first (in 10 m steps, so photos from the same spot tie), then newest first: a stable order.
-        return hits.filter { it.meters <= radiusMeters }
-            .sortedWith(compareBy<Hit> { (it.meters / 10).toInt() }.thenByDescending { it.time })
-            .map { it.selection }
+        val own = s.visible.associateBy { ownKey(it.id) }
+        val com = s.community.associateBy { communityKey(it.id) }
+        return keys.mapNotNull { k -> own[k]?.let { MapSelection.Own(it) } ?: com[k]?.let { MapSelection.Community(it) } }
     }
 
     fun select(key: String?) {

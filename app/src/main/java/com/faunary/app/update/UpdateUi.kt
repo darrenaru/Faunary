@@ -1,6 +1,22 @@
 package com.faunary.app.update
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.style.TextAlign
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -130,5 +146,90 @@ fun rememberInstallAction(viewModel: UpdateViewModel): () -> Unit {
     return {
         if (viewModel.canInstall()) viewModel.install()
         else context.startActivity(viewModel.installPermissionIntent())
+    }
+}
+
+/**
+ * Full-screen gate shown instead of the app while [UpdateState.mandatory]: no close button and no
+ * way around it (Back just leaves the app). "Update Sekarang" downloads if needed, then installs.
+ */
+@Composable
+fun MandatoryUpdateScreen(viewModel: UpdateViewModel = hiltViewModel()) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val install = rememberInstallAction(viewModel)
+    val c = FaunaryTheme.colors
+    // Tapped before the download finished: install as soon as it's ready.
+    var installWhenReady by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(state.ready, installWhenReady) {
+        if (state.ready && installWhenReady) {
+            installWhenReady = false
+            install()
+        }
+    }
+    val busy = state.downloading || (installWhenReady && !state.ready)
+
+    Box(
+        Modifier.fillMaxSize().background(c.background).statusBarsPadding().navigationBarsPadding().padding(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+            Box(Modifier.size(96.dp).clip(CircleShape).background(c.highlight), contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.SystemUpdate, null, Modifier.size(48.dp), tint = c.onHighlight)
+            }
+            Spacer(Modifier.height(24.dp))
+            Text("Pembaruan wajib", style = MaterialTheme.typography.headlineMedium, color = c.foreground, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Versi ${state.availableVersion ?: "terbaru"} diperlukan untuk melanjutkan. Perbarui Faunary agar tetap bisa memakai aplikasi.",
+                style = MaterialTheme.typography.bodyLarge, color = c.foregroundSecondary, textAlign = TextAlign.Center,
+            )
+            if (state.notes.isNotBlank()) {
+                Spacer(Modifier.height(20.dp))
+                FaunaryCard(Modifier.fillMaxWidth()) {
+                    Text("Yang baru", style = MaterialTheme.typography.labelLarge, color = c.foregroundSecondary)
+                    Spacer(Modifier.height(6.dp))
+                    Text(state.notes, style = MaterialTheme.typography.bodyMedium, color = c.foreground)
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+            if (state.downloading && state.downloadSize > 0) {
+                LinearProgressIndicator(
+                    progress = { (state.downloadedBytes.toFloat() / state.downloadSize).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape),
+                    color = c.primary, trackColor = c.surfaceMuted,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Mengunduh ${formatBytes(state.downloadedBytes)} dari ${formatBytes(state.downloadSize)}",
+                    style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary,
+                )
+                Spacer(Modifier.height(16.dp))
+            } else {
+                state.error?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = c.danger, textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(16.dp))
+                }
+            }
+            FaunaryButton(
+                text = if (busy) "Mengunduh pembaruan…" else "Update Sekarang",
+                onClick = {
+                    if (state.ready) install()
+                    else {
+                        installWhenReady = true
+                        viewModel.downloadNow()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                icon = Icons.Rounded.SystemUpdate,
+                enabled = !busy,
+            )
+            if (!state.ready && !busy && state.downloadSize > 0) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Ukuran unduhan ${formatBytes(state.downloadSize)}" + if (state.isPatch) " (hanya bagian yang berubah)" else "",
+                    style = MaterialTheme.typography.bodySmall, color = c.foregroundMuted, textAlign = TextAlign.Center,
+                )
+            }
+        }
     }
 }

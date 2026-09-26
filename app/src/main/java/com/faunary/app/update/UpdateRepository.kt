@@ -42,6 +42,8 @@ data class ReleaseManifest(
     val versionCode: Int,
     val versionName: String,
     val notes: String = "",
+    /** Installed builds below this version code must update before the app can be used (0 = none). */
+    val minVersionCode: Int = 0,
     val abis: Map<String, AbiRelease>,
 )
 
@@ -61,8 +63,13 @@ data class UpdateState(
     val error: String? = null,
     val lastChecked: Long = 0,
     val allowMobileData: Boolean = false,
+    /** From the manifest; remembered so the requirement also holds while offline. */
+    val minVersionCode: Int = 0,
 ) {
     val hasUpdate: Boolean get() = availableCode > BuildConfig.VERSION_CODE
+
+    /** This build is no longer supported: the app is blocked until the update is installed. */
+    val mandatory: Boolean get() = hasUpdate && minVersionCode > BuildConfig.VERSION_CODE
 }
 
 /**
@@ -87,6 +94,13 @@ class UpdateRepository @Inject constructor(@ApplicationContext private val conte
         prefs.edit { putBoolean(KEY_ALLOW_METERED, allow) }
         _state.value = _state.value.copy(allowMobileData = allow)
     }
+
+    /** The system installer refused or the user cancelled; shown so they know to try again. */
+    fun reportInstallFailed() {
+        update { copy(error = "Pemasangan dibatalkan atau gagal. Ketuk tombol di bawah untuk mencoba lagi.") }
+    }
+
+    fun clearError() = update { copy(error = null) }
 
     fun isMetered(): Boolean =
         (context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).isActiveNetworkMetered
@@ -113,10 +127,15 @@ class UpdateRepository @Inject constructor(@ApplicationContext private val conte
                 return@withContext true
             }
             val entry = manifest.abis.getValue(abi)
+            // A required update is fetched right away, whatever the network: the app can't be used without it.
+            val mandatory = manifest.minVersionCode > BuildConfig.VERSION_CODE
+            val fetch = download || mandatory
+            update { copy(minVersionCode = manifest.minVersionCode) }
 
             // Already downloaded and verified for this version?
             if (prefs.getInt(KEY_READY_CODE, 0) == manifest.versionCode && readyFile().exists()) {
                 update { copy(ready = true, downloading = false, waitingForWifi = false) }
+                persist()
                 return@withContext true
             }
 
@@ -127,11 +146,11 @@ class UpdateRepository @Inject constructor(@ApplicationContext private val conte
                     availableVersion = manifest.versionName, availableCode = manifest.versionCode, notes = manifest.notes,
                     downloadSize = patch?.size ?: entry.apk.size, isPatch = patch != null,
                     downloadedBytes = 0, ready = false, error = null, lastChecked = System.currentTimeMillis(),
-                    waitingForWifi = !download,
+                    waitingForWifi = !fetch,
                 )
             }
             persist()
-            if (!download) return@withContext true
+            if (!fetch) return@withContext true
 
             update { copy(downloading = true, waitingForWifi = false) }
             val ok = (patch != null && tryPatch(patch, entry.apk)) || tryFull(entry.apk)
@@ -266,6 +285,7 @@ class UpdateRepository @Inject constructor(@ApplicationContext private val conte
             putLong(KEY_SIZE, s.downloadSize)
             putBoolean(KEY_IS_PATCH, s.isPatch)
             putLong(KEY_CHECKED, s.lastChecked)
+            putInt(KEY_MIN_CODE, s.minVersionCode)
         }
     }
 
@@ -281,6 +301,7 @@ class UpdateRepository @Inject constructor(@ApplicationContext private val conte
             ready = ready,
             lastChecked = prefs.getLong(KEY_CHECKED, 0),
             allowMobileData = prefs.getBoolean(KEY_ALLOW_METERED, false),
+            minVersionCode = prefs.getInt(KEY_MIN_CODE, 0),
         )
     }
 
@@ -297,5 +318,6 @@ class UpdateRepository @Inject constructor(@ApplicationContext private val conte
         private const val KEY_BASE_SHA = "base_sha"
         private const val KEY_BASE_SHA_TIME = "base_sha_time"
         private const val KEY_ALLOW_METERED = "allow_metered"
+        private const val KEY_MIN_CODE = "min_code"
     }
 }

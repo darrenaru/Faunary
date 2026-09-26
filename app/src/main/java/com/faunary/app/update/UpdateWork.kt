@@ -24,6 +24,7 @@ import androidx.work.workDataOf
 import com.faunary.app.BuildConfig
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -114,6 +115,7 @@ class UpdateInstaller @Inject constructor(
 
     suspend fun install(): Boolean = withContext(Dispatchers.IO) {
         val apk = updates.readyApk ?: return@withContext false
+        updates.clearError()
         runCatching {
             val installer = context.packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
@@ -141,7 +143,10 @@ class UpdateInstaller @Inject constructor(
 }
 
 /** Receives the installer status; shows the system confirmation dialog when it's needed. */
+@AndroidEntryPoint
 class InstallResultReceiver : BroadcastReceiver() {
+    @Inject lateinit var updates: UpdateRepository
+
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
@@ -150,7 +155,10 @@ class InstallResultReceiver : BroadcastReceiver() {
                 context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
             PackageInstaller.STATUS_SUCCESS -> Unit // the app restarts on the new version
-            else -> Log.w("FaunaryUpdate", "install status: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)}")
+            else -> {
+                Log.w("FaunaryUpdate", "install status: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)}")
+                updates.reportInstallFailed()
+            }
         }
     }
 }

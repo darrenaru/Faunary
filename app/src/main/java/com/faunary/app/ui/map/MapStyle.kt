@@ -5,6 +5,9 @@ package com.faunary.app.ui.map
  * (cream land, muted parks, soft water, low-contrast roads, few labels).
  *
  * In 3D mode it adds terrain + hillshade, extruded buildings and a warm sky/fog.
+ *
+ * Always uses the globe projection: zoomed far out the map becomes a 3D globe (with a soft
+ * atmosphere and country labels), and it flattens back to a regular map around zoom 5–6.
  */
 object MapStyle {
     private data class Palette(
@@ -13,6 +16,7 @@ object MapStyle {
         val label: String, val labelHalo: String, val placeLabel: String,
         val extrusion: String, val hillShadow: String, val hillHighlight: String,
         val fogHigh: String, val space: String,
+        val border: String, val countryLabel: String, val stars: Double,
     )
 
     private val light = Palette(
@@ -21,6 +25,7 @@ object MapStyle {
         label = "#7A6658", labelHalo = "#F5EDE0", placeLabel = "#4A3023",
         extrusion = "#E2D2BC", hillShadow = "#7A4E28", hillHighlight = "#FBF8F1",
         fogHigh = "#F7D89A", space = "#D8E2F0",
+        border = "#C9B49C", countryLabel = "#6B5444", stars = 0.0,
     )
 
     private val dark = Palette(
@@ -29,6 +34,7 @@ object MapStyle {
         label = "#AFA094", labelHalo = "#29231F", placeLabel = "#F5EDE0",
         extrusion = "#54443A", hillShadow = "#120E0B", hillHighlight = "#655246",
         fogHigh = "#40342B", space = "#1E1814",
+        border = "#5A4A3E", countryLabel = "#CDBFB2", stars = 0.25,
     )
 
     fun json(darkTheme: Boolean, threeD: Boolean = false): String {
@@ -42,10 +48,14 @@ object MapStyle {
 
         // Lights stay neutral white (ambient 0.8 + sun 0.2): tinted light would recolour every
         // flat layer and push the cream palette towards yellow.
+        // Fog is also the globe's atmosphere and the colour of space around it, so it's on in 2D too.
+        val globe = """
+          "projection": { "name": "globe" },
+          "fog": { "range": [1, 12], "color": "${p.land}", "high-color": "${p.fogHigh}", "horizon-blend": 0.12, "space-color": "${p.space}", "star-intensity": ${p.stars} },"""
+
         val atmosphere = if (threeD) {
             """
           "terrain": { "source": "mapbox-dem", "exaggeration": 1.4 },
-          "fog": { "range": [1, 12], "color": "${p.land}", "high-color": "${p.fogHigh}", "horizon-blend": 0.12, "space-color": "${p.space}", "star-intensity": 0 },
           "lights": [
             { "id": "ambient", "type": "ambient", "properties": { "color": "#FFFFFF", "intensity": 0.8 } },
             { "id": "sun", "type": "directional", "properties": { "color": "#FFFFFF", "intensity": 0.2,
@@ -80,7 +90,7 @@ object MapStyle {
         {
           "version": 8,
           "name": "Faunary Warm",
-          "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",$atmosphere
+          "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",$globe$atmosphere
           "sources": {
             "streets": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8" }$demSource
           },
@@ -95,6 +105,11 @@ object MapStyle {
               "paint": { "fill-color": "${p.water}" } },
             { "id": "waterway", "type": "line", "source": "streets", "source-layer": "waterway",
               "paint": { "line-color": "${p.water}", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1, 16, 4] } },
+            { "id": "admin-country", "type": "line", "source": "streets", "source-layer": "admin",
+              "filter": ["all", ["==", ["get", "admin_level"], 0], ["==", ["get", "maritime"], "false"], ["match", ["get", "worldview"], ["all", "US"], true, false]],
+              "layout": { "line-join": "round" },
+              "paint": { "line-color": "${p.border}", "line-width": ["interpolate", ["linear"], ["zoom"], 1, 0.6, 8, 1.6],
+                         "line-opacity": ["interpolate", ["linear"], ["zoom"], 8, 1, 11, 0] } },
 $flatBuildings
             { "id": "road-minor", "type": "line", "source": "streets", "source-layer": "road", "minzoom": 12,
               "filter": ["match", ["get", "class"], ["street", "street_limited", "service", "secondary_link", "tertiary_link", "primary_link"], true, false],
@@ -124,10 +139,21 @@ $extrudedBuildings
               "paint": { "text-color": "#82985A", "text-halo-color": "${p.labelHalo}", "text-halo-width": 1.2 } },
             { "id": "place-label", "type": "symbol", "source": "streets", "source-layer": "place_label",
               "filter": ["match", ["get", "class"], ["settlement", "settlement_subdivision"], true, false],
-              "layout": { "text-field": ["get", "name"], "text-transform": "uppercase", "text-letter-spacing": 0.08,
+              "layout": { "text-field": ["coalesce", ["get", "name_en"], ["get", "name"]], "text-transform": "uppercase", "text-letter-spacing": 0.08,
                           "text-size": ["interpolate", ["linear"], ["zoom"], 10, 10, 16, 13], "text-max-width": 8,
                           "text-font": ["Inter Bold", "Arial Unicode MS Bold"] },
-              "paint": { "text-color": "${p.placeLabel}", "text-opacity": 0.7, "text-halo-color": "${p.labelHalo}", "text-halo-width": 1.5 } }
+              "paint": { "text-color": "${p.placeLabel}", "text-opacity": 0.7, "text-halo-color": "${p.labelHalo}", "text-halo-width": 1.5 } },
+            { "id": "state-label", "type": "symbol", "source": "streets", "source-layer": "place_label", "minzoom": 4, "maxzoom": 8,
+              "filter": ["==", ["get", "class"], "state"],
+              "layout": { "text-field": ["coalesce", ["get", "name_en"], ["get", "name"]], "text-size": 11, "text-max-width": 8,
+                          "text-font": ["Inter Medium", "Arial Unicode MS Regular"] },
+              "paint": { "text-color": "${p.countryLabel}", "text-opacity": 0.8, "text-halo-color": "${p.labelHalo}", "text-halo-width": 1.2 } },
+            { "id": "country-label", "type": "symbol", "source": "streets", "source-layer": "place_label", "maxzoom": 7,
+              "filter": ["==", ["get", "class"], "country"],
+              "layout": { "text-field": ["coalesce", ["get", "name_en"], ["get", "name"]], "text-transform": "uppercase", "text-letter-spacing": 0.1,
+                          "text-size": ["interpolate", ["linear"], ["zoom"], 1, 10, 6, 14], "text-max-width": 7,
+                          "text-font": ["Inter Bold", "Arial Unicode MS Bold"] },
+              "paint": { "text-color": "${p.countryLabel}", "text-halo-color": "${p.labelHalo}", "text-halo-width": 1.5 } }
           ]
         }
         """.trimIndent()

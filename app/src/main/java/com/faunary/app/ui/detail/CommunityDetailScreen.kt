@@ -37,7 +37,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
@@ -60,7 +59,6 @@ import com.faunary.app.ui.components.softShadow
 import com.faunary.app.ui.navigation.CommunityDetailRoute
 import com.faunary.app.ui.theme.FaunaryTheme
 import com.faunary.app.util.Format
-import com.faunary.app.util.openDirections
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -91,7 +89,11 @@ class CommunityDetailViewModel @Inject constructor(
 
 /** Read-only view of someone else's sighting. */
 @Composable
-fun CommunityDetailScreen(onBack: () -> Unit, viewModel: CommunityDetailViewModel = hiltViewModel()) {
+fun CommunityDetailScreen(
+    onBack: () -> Unit,
+    onRoute: (Double, Double, String) -> Unit,
+    viewModel: CommunityDetailViewModel = hiltViewModel(),
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val c = FaunaryTheme.colors
     Box(Modifier.fillMaxSize().background(c.background)) {
@@ -101,16 +103,15 @@ fun CommunityDetailScreen(onBack: () -> Unit, viewModel: CommunityDetailViewMode
                 EmptyState(Icons.Rounded.CloudOff, "Temuan tidak tersedia", "Mungkin sudah dihapus pemiliknya, atau kamu sedang offline.")
                 FaunaryButton("Kembali", onBack, Modifier.align(Alignment.CenterHorizontally), kind = ButtonKind.Ghost)
             }
-            is CommunityDetailState.Ready -> Content(s.sighting, onBack)
+            is CommunityDetailState.Ready -> Content(s.sighting, onBack, onRoute)
         }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Content(s: CommunitySighting, onBack: () -> Unit) {
+private fun Content(s: CommunitySighting, onBack: () -> Unit, onRoute: (Double, Double, String) -> Unit) {
     val c = FaunaryTheme.colors
-    val context = LocalContext.current
     Column(
         Modifier
             .fillMaxSize()
@@ -176,7 +177,7 @@ private fun Content(s: CommunitySighting, onBack: () -> Unit) {
             Text(Format.coordinates(s.latitude, s.longitude), style = MaterialTheme.typography.labelLarge, color = c.brand)
             Spacer(Modifier.height(12.dp))
             FaunaryButton(
-                "Rute ke Sini", { context.openDirections(s.latitude, s.longitude, s.animalLabel) },
+                "Rute ke Sini", { onRoute(s.latitude, s.longitude, s.animalLabel) },
                 Modifier.fillMaxWidth(), icon = Icons.Rounded.Directions, height = 44.dp,
             )
         }

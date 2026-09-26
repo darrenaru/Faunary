@@ -23,7 +23,7 @@ import kotlin.math.min
  * Draws the round map markers:
  * - OWN: photo inside a Canyon ring
  * - COMMUNITY: photo inside a blue ring (other people's finds)
- * - LIVE: initial letter in an olive ring with the user's name underneath
+ * - LIVE: initial letter in an olive ring with the user's name underneath (pulsed by FaunaMap)
  * Bitmaps are cached, so re-syncing annotations stays cheap.
  */
 class MarkerFactory(private val context: Context, private val density: Float) {
@@ -87,6 +87,10 @@ class MarkerFactory(private val context: Context, private val density: Float) {
         return bmp
     }
 
+    /**
+     * Avatar with the initial and a name pill underneath. The avatar is centred on the bitmap so
+     * it sits exactly on the coordinate, where the heartbeat ring (drawn by the map) pulses out.
+     */
     private fun liveMarker(name: String, selected: Boolean, dark: Boolean): Bitmap {
         val avatar = (if (selected) 44f else 36f) * density
         val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -97,16 +101,16 @@ class MarkerFactory(private val context: Context, private val density: Float) {
         val shortName = if (name.length > 14) name.take(13) + "…" else name
         val labelW = labelPaint.measureText(shortName) + 14f * density
         val labelH = 18f * density
-        val halo = 8f * density
-        val width = max(avatar + halo * 2, labelW).toInt() + 4
-        val height = (avatar + halo * 2 + labelH).toInt()
+        val gap = 2f * density
+        val shadow = 4f * density
+        val width = (max(avatar + shadow * 2, labelW) + 4).toInt()
+        // Mirror the label's space above the avatar so the avatar centre is the bitmap centre.
+        val height = (avatar + (gap + labelH + shadow) * 2).toInt()
         val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
         val cx = width / 2f
-        val cy = halo + avatar / 2
+        val cy = height / 2f
 
-        // Soft "online" halo, then olive-ringed avatar with the initial.
-        canvas.drawCircle(cx, cy, avatar / 2 + halo, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x40AAA648 })
         canvas.drawCircle(cx, cy, avatar / 2, Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFFAAA648.toInt()
             setShadowLayer(3f * density, 0f, 1f * density, 0x334A3023)
@@ -122,7 +126,7 @@ class MarkerFactory(private val context: Context, private val density: Float) {
         }
         canvas.drawText(name.take(1).uppercase(), cx, cy - (initial.descent() + initial.ascent()) / 2, initial)
 
-        val top = cy + avatar / 2 + 2f * density
+        val top = cy + avatar / 2 + gap
         val rect = RectF(cx - labelW / 2, top, cx + labelW / 2, top + labelH)
         canvas.drawRoundRect(rect, labelH / 2, labelH / 2, Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = if (dark) 0xE6342B25.toInt() else 0xE6FBF8F1.toInt()

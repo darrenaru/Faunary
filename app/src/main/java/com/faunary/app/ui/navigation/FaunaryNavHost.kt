@@ -64,6 +64,12 @@ fun FaunaryNavHost(navController: NavHostController = rememberNavController()) {
     val currentTab = backStack?.destination.tab()
     val openDetail: (Long) -> Unit = { navController.navigate(DetailRoute(it)) }
     val openCamera: () -> Unit = { navController.navigate(CameraRoute) }
+    val routeOnMap: (Double, Double, String) -> Unit = { lat, lng, label ->
+        navController.navigate(MapRoute(routeTo = encodeLatLng(lat, lng), routeLabel = label)) {
+            popUpTo(navController.graph.findStartDestination().id) { inclusive = true }
+            launchSingleTop = true
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         NavHost(
@@ -73,9 +79,11 @@ fun FaunaryNavHost(navController: NavHostController = rememberNavController()) {
             exitTransition = { fadeOut(tween(180)) },
         ) {
             composable<MapRoute> { entry ->
-                val focus = entry.toRoute<MapRoute>().focusId.takeIf { it != NO_ID }
+                val args = entry.toRoute<MapRoute>()
                 MapScreen(
-                    focusId = focus,
+                    focusId = args.focusId.takeIf { it != NO_ID },
+                    routeTo = decodeLatLng(args.routeTo),
+                    routeLabel = args.routeLabel,
                     onOpenDetail = openDetail,
                     onOpenCommunity = { navController.navigate(CommunityDetailRoute(it)) },
                     onOpenCamera = openCamera,
@@ -126,13 +134,14 @@ fun FaunaryNavHost(navController: NavHostController = rememberNavController()) {
                         }
                     },
                     onEditLocation = { start -> navController.navigate(LocationPickerRoute(start)) },
+                    onRoute = routeOnMap,
                 )
             }
             composable<CommunityDetailRoute>(
                 enterTransition = { slideInHorizontally(tween(250)) { it / 4 } + fadeIn(tween(250)) },
                 popExitTransition = { slideOutHorizontally(tween(200)) { it / 4 } + fadeOut(tween(200)) },
             ) {
-                CommunityDetailScreen(onBack = { navController.popBackStack() })
+                CommunityDetailScreen(onBack = { navController.popBackStack() }, onRoute = routeOnMap)
             }
             composable<LocationPickerRoute> { entry ->
                 LocationPickerScreen(

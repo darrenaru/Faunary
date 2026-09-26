@@ -41,9 +41,23 @@ class CommunityRepository @Inject constructor(private val supabase: SupabaseProv
 
     val isAvailable: Boolean get() = supabase.isConfigured
 
-    suspend fun sightingsIn(bounds: Bounds, limit: Long = 300): List<CommunitySighting> {
-        val client = supabase.client ?: return emptyList()
-        val me = supabase.ensureUserId() ?: return emptyList()
+    /** Most recent finds anywhere, so distant sightings are on the map without panning to them. Null on failure. */
+    suspend fun recentSightings(limit: Long = 500): List<CommunitySighting>? {
+        val client = supabase.client ?: return null
+        val me = supabase.ensureUserId() ?: return null
+        return runCatching {
+            client.from("community_sightings").select {
+                filter { neq("user_id", me) }
+                order("taken_at_ms", Order.DESCENDING)
+                limit(limit)
+            }.decodeList<CommunitySighting>()
+        }.onFailure { Log.w(TAG, "fetch recent failed", it) }.getOrNull()
+    }
+
+    /** Finds inside [bounds] (for dense areas beyond the recent set). Null on failure so callers can retry. */
+    suspend fun sightingsIn(bounds: Bounds, limit: Long = 300): List<CommunitySighting>? {
+        val client = supabase.client ?: return null
+        val me = supabase.ensureUserId() ?: return null
         return runCatching {
             client.from("community_sightings").select {
                 filter {
@@ -56,7 +70,7 @@ class CommunityRepository @Inject constructor(private val supabase: SupabaseProv
                 order("taken_at_ms", Order.DESCENDING)
                 limit(limit)
             }.decodeList<CommunitySighting>()
-        }.onFailure { Log.w(TAG, "fetch sightings failed", it) }.getOrDefault(emptyList())
+        }.onFailure { Log.w(TAG, "fetch sightings failed", it) }.getOrNull()
     }
 
     suspend fun sighting(id: String): CommunitySighting? {

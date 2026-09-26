@@ -9,17 +9,22 @@ import com.faunary.app.data.SightingRepository
 import com.faunary.app.domain.AnimalCategory
 import com.faunary.app.location.GeoPoint
 import com.faunary.app.location.LocationRepository
+import com.faunary.app.location.Route
+import com.faunary.app.location.RouteRepository
+import com.faunary.app.location.TravelMode
 import com.faunary.app.remote.Bounds
 import com.faunary.app.remote.CommunityRepository
 import com.faunary.app.remote.CommunitySighting
 import com.faunary.app.remote.LiveChange
 import com.faunary.app.remote.SightingChange
+import com.faunary.app.util.Geo
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -36,6 +41,18 @@ data class LiveUser(
     val accuracy: Float?,
     /** Local receive time; users drop off the map after [LIVE_TTL_MS] without an update. */
     val seenAt: Long,
+)
+
+/** In-app route to a destination; [route] is null while loading or on error. */
+data class RouteUi(
+    val destLat: Double,
+    val destLng: Double,
+    val label: String,
+    val mode: TravelMode = TravelMode.WALKING,
+    val loading: Boolean = true,
+    val route: Route? = null,
+    val error: String? = null,
+    val needsPermission: Boolean = false,
 )
 
 data class MapLayers(val own: Boolean = true, val community: Boolean = true, val live: Boolean = true)
@@ -98,7 +115,12 @@ class MapViewModel @Inject constructor(
     private val location: LocationRepository,
     private val settings: SettingsRepository,
     private val communityRepo: CommunityRepository,
+    private val routes: RouteRepository,
 ) : ViewModel() {
+
+    private val routeState = MutableStateFlow<RouteUi?>(null)
+    val route: StateFlow<RouteUi?> = routeState.asStateFlow()
+    private var routeJob: Job? = null
 
     /** Last camera position, so returning to the Map tab doesn't reset the view. */
     var camera: Pair<GeoPoint, Double>? = null
@@ -145,9 +167,8 @@ class MapViewModel @Inject constructor(
             viewModelScope.launch {
                 communityRepo.sightingChanges().collect { change ->
                     when (change) {
-                        is SightingChange.Upserted -> if (lastBounds?.contains(change.sighting.latitude, change.sighting.longitude) != false) {
-                            community.update { it + (change.sighting.id to change.sighting) }
-                        }
+                        // New finds are always added, wherever they are: the map clusters them.
+                        is SightingChange.Upserted -> community.update { it + (change.sighting.id to change.sighting) }
                         is SightingChange.Deleted -> community.update { it - change.id }
                     }
                 }
@@ -160,6 +181,14 @@ class MapViewModel @Inject constructor(
                         }
                         is LiveChange.Left -> live.update { it - change.userId }
                     }
+                }
+            }
+            // Recent finds everywhere, refreshed periodically as a fallback for missed realtime events.
+            viewModelScope.launch {
+                while (isActive) {
+                    val recent = communityRepo.recentSightings()
+                    if (recent != null) community.update { current -> current + recent.associateBy { it.id } }
+                    delay(if (recent == null) 10_000 else 180_000)
                 }
             }
             // Initial live snapshot, periodic refresh as a realtime fallback, and pruning of stale users.
@@ -190,9 +219,50 @@ class MapViewModel @Inject constructor(
         fetchJob?.cancel()
         fetchJob = viewModelScope.launch {
             delay(300)
-            val result = communityRepo.sightingsIn(padded)
+            // Merge, don't replace: the recent set and realtime inserts outside this area must stay.
+            // On failure lastBounds stays unchanged, so the next idle retries this area.
+            val result = communityRepo.sightingsIn(padded) ?: return@launch
             lastBounds = padded
-            community.value = result.associateBy { it.id }
+            community.update { current -> current + result.associateBy { it.id } }
+        }
+    }
+
+    fun startRoute(lat: Double, lng: Double, label: String) {
+        selectedKey.value = null
+        routeState.value = RouteUi(lat, lng, label, mode = routeState.value?.mode ?: TravelMode.WALKING)
+        fetchRoute()
+    }
+
+    fun setRouteMode(mode: TravelMode) {
+        routeState.update { it?.copy(mode = mode) }
+        fetchRoute()
+    }
+
+    /** Recomputes from the user's current position (e.g. after walking a bit). */
+    fun refreshRoute() = fetchRoute()
+
+    fun clearRoute() {
+        routeJob?.cancel()
+        routeState.value = null
+    }
+
+    private fun fetchRoute() {
+        routeJob?.cancel()
+        routeJob = viewModelScope.launch {
+            val target = routeState.value ?: return@launch
+            routeState.update { it?.copy(loading = true, error = null, needsPermission = false) }
+            if (!location.hasPermission()) {
+                routeState.update { it?.copy(loading = false, needsPermission = true, error = "Izinkan lokasi untuk menghitung rute dari posisimu.") }
+                return@launch
+            }
+            val from = location.currentLocation() ?: location.lastFix.value
+            if (from == null) {
+                routeState.update { it?.copy(loading = false, error = "Posisimu belum terdeteksi. Pastikan GPS aktif lalu coba lagi.") }
+                return@launch
+            }
+            routes.route(from, target.destLat, target.destLng, target.mode)
+                .onSuccess { r -> routeState.update { it?.copy(loading = false, route = r) } }
+                .onFailure { routeState.update { it?.copy(loading = false, route = null, error = "Rute tidak bisa dimuat. Periksa koneksi internet lalu coba lagi.") } }
         }
     }
 
@@ -210,6 +280,21 @@ class MapViewModel @Inject constructor(
 
     fun setLayers(value: MapLayers) {
         layers.value = value
+    }
+
+    /** Sightings of [kind] around a tapped cluster, nearest first. */
+    fun clusterItems(kind: MarkerKind, lat: Double, lng: Double, radiusMeters: Double): List<MapSelection> {
+        val s = state.value
+        data class Hit(val meters: Double, val time: Long, val selection: MapSelection)
+        val hits = when (kind) {
+            MarkerKind.OWN -> s.visible.map { Hit(Geo.distanceMeters(lat, lng, it.latitude, it.longitude), it.timestamp, MapSelection.Own(it)) }
+            MarkerKind.COMMUNITY -> s.community.map { Hit(Geo.distanceMeters(lat, lng, it.latitude, it.longitude), it.takenAtMs, MapSelection.Community(it)) }
+            MarkerKind.LIVE -> emptyList()
+        }
+        // Nearest first (in 10 m steps, so photos from the same spot tie), then newest first: a stable order.
+        return hits.filter { it.meters <= radiusMeters }
+            .sortedWith(compareBy<Hit> { (it.meters / 10).toInt() }.thenByDescending { it.time })
+            .map { it.selection }
     }
 
     fun select(key: String?) {

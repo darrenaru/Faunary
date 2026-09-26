@@ -81,7 +81,6 @@ import com.faunary.app.ui.components.icon
 import com.faunary.app.ui.components.softShadow
 import com.faunary.app.ui.theme.FaunaryTheme
 import com.faunary.app.util.Format
-import com.faunary.app.util.openDirections
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -90,6 +89,7 @@ fun DetailScreen(
     onBack: () -> Unit,
     onShowOnMap: (Long) -> Unit,
     onEditLocation: (start: String) -> Unit,
+    onRoute: (Double, Double, String) -> Unit,
     viewModel: DetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -101,7 +101,7 @@ fun DetailScreen(
                 EmptyState(Icons.Rounded.PinDrop, "Temuan tidak ditemukan", "Entri ini mungkin sudah dihapus.")
                 FaunaryButton("Kembali", onBack, Modifier.align(Alignment.CenterHorizontally), kind = ButtonKind.Ghost)
             }
-            is DetailUiState.Ready -> DetailContent(s.sighting, viewModel, onBack, onShowOnMap, onEditLocation)
+            is DetailUiState.Ready -> DetailContent(s.sighting, viewModel, onBack, onShowOnMap, onEditLocation, onRoute)
         }
     }
 }
@@ -114,6 +114,7 @@ private fun DetailContent(
     onBack: () -> Unit,
     onShowOnMap: (Long) -> Unit,
     onEditLocation: (String) -> Unit,
+    onRoute: (Double, Double, String) -> Unit,
 ) {
     val c = FaunaryTheme.colors
     val context = LocalContext.current
@@ -255,7 +256,7 @@ private fun DetailContent(
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 FaunaryButton("Lihat di Peta", { onShowOnMap(s.id) }, Modifier.weight(1f), kind = ButtonKind.Secondary, icon = Icons.Rounded.Map, height = 44.dp)
-                FaunaryButton("Rute", { context.openDirections(s.latitude, s.longitude, s.animalLabel) }, Modifier.weight(1f), icon = Icons.Rounded.Directions, height = 44.dp)
+                FaunaryButton("Rute", { onRoute(s.latitude, s.longitude, s.animalLabel) }, Modifier.weight(1f), icon = Icons.Rounded.Directions, height = 44.dp)
             }
             Spacer(Modifier.height(4.dp))
             Text(

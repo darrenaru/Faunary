@@ -2,8 +2,9 @@ package com.faunary.app.ui.navigation
 
 import kotlinx.serialization.Serializable
 
+/** [routeTo] ("lat,lng") + [routeLabel] open the map with an in-app route already drawn. */
 @Serializable
-data class MapRoute(val focusId: Long = NO_ID)
+data class MapRoute(val focusId: Long = NO_ID, val routeTo: String? = null, val routeLabel: String? = null)
 
 @Serializable
 data object GalleryRoute

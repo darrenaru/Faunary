@@ -37,6 +37,11 @@ object Format {
 
     fun monthYear(timestamp: Long): String = SimpleDateFormat("MMMM yyyy", ID).format(Date(timestamp))
 
+    fun duration(seconds: Double): String {
+        val totalMin = (seconds / 60).roundToInt().coerceAtLeast(1)
+        return if (totalMin < 60) "$totalMin mnt" else "${totalMin / 60} j ${totalMin % 60} mnt"
+    }
+
     fun percent(confidence: Float): String = "${(confidence * 100).roundToInt()}%"
 
     fun coordinates(lat: Double, lng: Double): String =

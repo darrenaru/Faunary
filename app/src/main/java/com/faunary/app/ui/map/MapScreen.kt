@@ -37,6 +37,16 @@ import androidx.compose.material.icons.rounded.Pets
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DirectionsCar
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material3.CircularProgressIndicator
+import com.faunary.app.location.TravelMode
+import com.faunary.app.ui.components.IconBadge
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.Person
@@ -89,7 +99,6 @@ import com.faunary.app.ui.components.softShadow
 import com.faunary.app.ui.theme.FaunaryTheme
 import com.faunary.app.util.Format
 import com.faunary.app.util.LocationPermissions
-import com.faunary.app.util.openDirections
 import com.faunary.app.util.rememberPermissionState
 
 /** Space reserved at the bottom for the floating navigation bar. */
@@ -98,27 +107,38 @@ val BottomBarSpace = 104.dp
 @Composable
 fun MapScreen(
     focusId: Long?,
+    routeTo: Pair<Double, Double>?,
+    routeLabel: String?,
     onOpenDetail: (Long) -> Unit,
     onOpenCommunity: (String) -> Unit,
     onOpenCamera: () -> Unit,
     viewModel: MapViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val routeUi by viewModel.route.collectAsStateWithLifecycle()
     val c = FaunaryTheme.colors
-    val context = LocalContext.current
     val density = LocalDensity.current
     val controller = rememberFaunaMapController()
     val cardPaddingPx = with(density) { 260.dp.toPx().toDouble() }
 
     var locationDismissed by rememberSaveable { mutableStateOf(false) }
+    var clusterList by remember { mutableStateOf<ClusterList?>(null) }
     val locationPermission = rememberPermissionState(LocationPermissions) { granted ->
-        if (granted) viewModel.refreshLocation { controller.flyTo(it.latitude, it.longitude, 15.0) }
+        if (granted) {
+            if (routeUi != null) viewModel.refreshRoute()
+            else viewModel.refreshLocation { controller.flyTo(it.latitude, it.longitude, 15.0) }
+        }
+    }
+
+    // Opened from a detail screen's "Rute" button: draw that route straight away.
+    LaunchedEffect(routeTo) {
+        routeTo?.let { (lat, lng) -> viewModel.startRoute(lat, lng, routeLabel ?: "Tujuan") }
     }
 
     // Centre the camera once when data first arrives: focused entry > latest entry > GPS.
     var centered by rememberSaveable { mutableStateOf(viewModel.camera != null) }
     LaunchedEffect(state.loaded) {
-        if (!state.loaded || centered) return@LaunchedEffect
+        if (!state.loaded || centered || routeTo != null) return@LaunchedEffect
         centered = true
         val focus = focusId?.let { id -> state.all.firstOrNull { it.id == id } }
         when {
@@ -140,15 +160,28 @@ fun MapScreen(
             controller = controller,
             selectedKey = state.selection?.key,
             onMarkerClick = { key ->
+                clusterList = null
                 viewModel.select(key)
                 state.markers.firstOrNull { it.key == key }?.let {
                     controller.flyTo(it.latitude, it.longitude, bottomPaddingPx = cardPaddingPx)
                 }
             },
             onCameraIdle = viewModel::onCameraIdle,
-            onMapClick = { viewModel.select(null) },
+            route = routeUi?.route?.points,
+            routeTopPadding = 190.dp,
+            routeBottomPadding = BottomBarSpace + 250.dp,
+            onMapClick = {
+                viewModel.select(null)
+                clusterList = null
+            },
+            onClusterClick = { kind, lat, lng, radius ->
+                viewModel.select(null)
+                val items = viewModel.clusterItems(kind, lat, lng, radius)
+                clusterList = if (items.isNotEmpty()) ClusterList(lat, lng, items) else null
+                controller.flyTo(lat, lng, bottomPaddingPx = cardPaddingPx)
+            },
             showUserLocation = locationPermission.granted,
-            ornamentBottomPadding = if (state.selection != null) 0.dp else BottomBarSpace,
+            ornamentBottomPadding = if (state.selection != null || clusterList != null || routeUi != null) 0.dp else BottomBarSpace,
             darkTheme = c.isDark,
             threeD = state.map3D,
             initialCenter = viewModel.camera?.first ?: DefaultCenter,
@@ -207,6 +240,7 @@ fun MapScreen(
             if (state.online) {
                 LayersButton(
                     layers = state.layers,
+                    communityCount = state.community.size,
                     liveCount = state.liveUsers.size,
                     shareLive = state.settings.shareLiveLocation,
                     onLayers = viewModel::setLayers,
@@ -236,7 +270,7 @@ fun MapScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             AnimatedVisibility(
-                visible = !locationPermission.granted && !locationDismissed && state.selection == null,
+                visible = !locationPermission.granted && !locationDismissed && state.selection == null && clusterList == null && routeUi == null,
                 enter = fadeIn(tween(200)), exit = fadeOut(tween(150)),
             ) {
                 PermissionCard(
@@ -250,7 +284,7 @@ fun MapScreen(
                 )
             }
             AnimatedVisibility(
-                visible = state.loaded && state.all.isEmpty() && (locationPermission.granted || locationDismissed),
+                visible = state.loaded && state.all.isEmpty() && routeUi == null && (locationPermission.granted || locationDismissed),
                 enter = fadeIn(tween(200)), exit = fadeOut(tween(150)),
             ) {
                 FaunaryCard {
@@ -272,7 +306,7 @@ fun MapScreen(
         var lastSelection by remember { mutableStateOf<MapSelection?>(null) }
         if (state.selection != null) lastSelection = state.selection
         AnimatedVisibility(
-            visible = state.selection != null,
+            visible = state.selection != null && routeUi == null,
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = slideInVertically(tween(250)) { it / 2 } + fadeIn(tween(250)),
             exit = slideOutVertically(tween(200)) { it / 2 } + fadeOut(tween(200)),
@@ -284,7 +318,7 @@ fun MapScreen(
                     SightingPreviewCard(
                         sighting = s,
                         onDetail = { onOpenDetail(s.id) },
-                        onRoute = { context.openDirections(s.latitude, s.longitude, s.animalLabel) },
+                        onRoute = { viewModel.startRoute(s.latitude, s.longitude, s.animalLabel) },
                         onFavorite = { viewModel.toggleFavorite(s.id) },
                         modifier = cardModifier,
                     )
@@ -294,17 +328,61 @@ fun MapScreen(
                     CommunityPreviewCard(
                         sighting = s,
                         onDetail = { onOpenCommunity(s.id) },
-                        onRoute = { context.openDirections(s.latitude, s.longitude, s.animalLabel) },
+                        onRoute = { viewModel.startRoute(s.latitude, s.longitude, s.animalLabel) },
                         modifier = cardModifier,
                     )
                 }
                 is MapSelection.Live -> LiveUserCard(
                     user = sel.user,
                     here = state.lastFix,
-                    onRoute = { context.openDirections(sel.user.latitude, sel.user.longitude, sel.user.name) },
+                    onRoute = { viewModel.startRoute(sel.user.latitude, sel.user.longitude, sel.user.name) },
                     modifier = cardModifier,
                 )
                 null -> Unit
+            }
+        }
+    }
+
+    AnimatedVisibility(
+        visible = routeUi != null,
+        enter = slideInVertically(tween(250)) { it / 2 } + fadeIn(tween(250)),
+        exit = slideOutVertically(tween(200)) { it / 2 } + fadeOut(tween(200)),
+    ) {
+        routeUi?.let { r ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                RouteCard(
+                    route = r,
+                    onMode = viewModel::setRouteMode,
+                    onRefresh = viewModel::refreshRoute,
+                    onGrant = { locationPermission.request() },
+                    onClose = viewModel::clearRoute,
+                    modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = BottomBarSpace + 8.dp),
+                )
+            }
+        }
+    }
+
+    // Tapped cluster: list what's inside (photos taken at the same spot never split apart by zooming).
+    val cluster = clusterList
+    AnimatedVisibility(
+        visible = cluster != null && state.selection == null && routeUi == null,
+        enter = slideInVertically(tween(250)) { it / 2 } + fadeIn(tween(250)),
+        exit = slideOutVertically(tween(200)) { it / 2 } + fadeOut(tween(200)),
+    ) {
+        if (cluster != null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                ClusterListCard(
+                    list = cluster,
+                    onPick = { sel ->
+                        clusterList = null
+                        viewModel.select(sel.key)
+                    },
+                    onZoom = {
+                        clusterList = null
+                        controller.flyTo(cluster.latitude, cluster.longitude, 17.5)
+                    },
+                    modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = BottomBarSpace + 8.dp),
+                )
             }
         }
     }
@@ -467,6 +545,7 @@ private fun LiveUserCard(user: LiveUser, here: GeoPoint?, onRoute: () -> Unit, m
 @Composable
 private fun LayersButton(
     layers: MapLayers,
+    communityCount: Int,
     liveCount: Int,
     shareLive: Boolean,
     onLayers: (MapLayers) -> Unit,
@@ -488,7 +567,7 @@ private fun LayersButton(
         DropdownMenu(open, { open = false }, shape = RoundedCornerShape(18.dp), containerColor = c.surface) {
             Text("Tampilkan di peta", style = MaterialTheme.typography.labelMedium, color = c.foregroundMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
             LayerItem("Temuan saya", c.primary, layers.own) { onLayers(layers.copy(own = it)) }
-            LayerItem("Temuan komunitas", c.info, layers.community) { onLayers(layers.copy(community = it)) }
+            LayerItem("Temuan komunitas ($communityCount)", c.info, layers.community) { onLayers(layers.copy(community = it)) }
             LayerItem("Penjelajah online ($liveCount)", c.secondary, layers.live) { onLayers(layers.copy(live = it)) }
             HorizontalDivider(color = c.border)
             DropdownMenuItem(
@@ -542,4 +621,109 @@ private fun PublicNoticeDialog(onAcknowledge: () -> Unit) {
         },
         confirmButton = { FaunaryButton("Saya Mengerti", onAcknowledge, height = 44.dp) },
     )
+}
+
+data class ClusterList(val latitude: Double, val longitude: Double, val items: List<MapSelection>)
+
+@Composable
+private fun ClusterListCard(
+    list: ClusterList,
+    onPick: (MapSelection) -> Unit,
+    onZoom: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = FaunaryTheme.colors
+    FaunaryCard(modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp)) {
+        Box(Modifier.align(Alignment.CenterHorizontally).size(width = 36.dp, height = 4.dp).clip(CircleShape).background(c.border))
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("${list.items.size} temuan di sekitar sini", style = MaterialTheme.typography.titleMedium, color = c.foreground, modifier = Modifier.weight(1f))
+            Text(
+                "Perbesar peta", style = MaterialTheme.typography.labelLarge, color = c.primary,
+                modifier = Modifier.clip(CircleShape).clickable(onClick = onZoom).padding(horizontal = 8.dp, vertical = 6.dp),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
+            list.items.forEach { sel ->
+                val (photo, label, sub, time) = when (sel) {
+                    is MapSelection.Own -> listOf(sel.sighting.photoPath, sel.sighting.animalLabel, "Temuanmu", Format.relative(sel.sighting.timestamp))
+                    is MapSelection.Community -> listOf(sel.sighting.photoUrl, sel.sighting.animalLabel, "oleh ${sel.sighting.displayName}", Format.relative(sel.sighting.takenAtMs))
+                    is MapSelection.Live -> listOf("", sel.user.name, "", "")
+                }
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable { onPick(sel) }.padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PhotoThumb(photo, Modifier.size(52.dp), RoundedCornerShape(14.dp), label)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(label, style = MaterialTheme.typography.titleSmall, color = c.foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(sub, style = MaterialTheme.typography.bodySmall, color = if (sel is MapSelection.Community) c.info else c.primary, maxLines = 1)
+                    }
+                    Text(time, style = MaterialTheme.typography.labelMedium, color = c.foregroundMuted)
+                    Spacer(Modifier.width(4.dp))
+                    Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, Modifier.size(18.dp), tint = c.foregroundMuted)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RouteCard(
+    route: RouteUi,
+    onMode: (TravelMode) -> Unit,
+    onRefresh: () -> Unit,
+    onGrant: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = FaunaryTheme.colors
+    FaunaryCard(modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBadge(Icons.Rounded.Directions, background = c.highlight)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Rute ke", style = MaterialTheme.typography.labelMedium, color = c.foregroundSecondary)
+                Text(route.label, style = MaterialTheme.typography.titleMedium, color = c.foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            SurfaceIconButton(Icons.Rounded.Refresh, "Hitung ulang dari posisiku", onRefresh, size = 40.dp)
+            Spacer(Modifier.width(8.dp))
+            SurfaceIconButton(Icons.Rounded.Close, "Tutup rute", onClose, size = 40.dp)
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TravelMode.entries.forEach { m ->
+                SelectableChip(
+                    m.label, route.mode == m, { onMode(m) },
+                    icon = if (m == TravelMode.WALKING) Icons.AutoMirrored.Rounded.DirectionsWalk else Icons.Rounded.DirectionsCar,
+                )
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        when {
+            route.loading -> Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(20.dp), color = c.primary, strokeWidth = 2.5.dp)
+                Spacer(Modifier.width(10.dp))
+                Text("Menghitung rute…", style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary)
+            }
+            route.route != null -> Row(verticalAlignment = Alignment.Bottom) {
+                Text(Format.duration(route.route.durationSeconds), style = MaterialTheme.typography.headlineMedium, color = c.foreground)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    Format.distance(route.route.distanceMeters) + " · " + route.mode.label.lowercase(),
+                    style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
+            else -> Column {
+                Text(route.error ?: "Rute tidak tersedia.", style = MaterialTheme.typography.bodyMedium, color = c.danger)
+                if (route.needsPermission) {
+                    Spacer(Modifier.height(10.dp))
+                    FaunaryButton("Izinkan Lokasi", onGrant, Modifier.fillMaxWidth(), height = 44.dp)
+                }
+            }
+        }
+    }
 }

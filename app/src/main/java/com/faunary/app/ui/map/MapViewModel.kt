@@ -85,7 +85,9 @@ data class MapUiState(
     val visible: List<AnimalSighting> = emptyList(),
     val community: List<CommunitySighting> = emptyList(),
     val liveUsers: List<LiveUser> = emptyList(),
+    /** Per-category totals of everything the map can show (own + community, per enabled layer). */
     val counts: Map<AnimalCategory, Int> = emptyMap(),
+    val totalCount: Int = 0,
     val filter: AnimalCategory? = null,
     val layers: MapLayers = MapLayers(),
     val selection: MapSelection? = null,
@@ -138,7 +140,6 @@ class MapViewModel @Inject constructor(
             loaded = true,
             all = all,
             visible = if (f == null) all else all.filter { it.animalCategory == f },
-            counts = all.groupingBy { it.animalCategory }.eachCount(),
             filter = f,
             lastFix = fix,
             settings = prefs,
@@ -149,7 +150,12 @@ class MapViewModel @Inject constructor(
     val state: StateFlow<MapUiState> = combine(own, community, live, layers, selectedKey) { base, com, liveMap, lay, sel ->
         val comList = com.values.filter { base.filter == null || it.animalCategory == base.filter }
         val liveList = liveMap.values.toList()
+        // Chip counts ignore the active filter (each chip shows its own total) but respect layers.
+        val categories = (if (lay.own) base.all.map { it.animalCategory } else emptyList()) +
+            (if (lay.community) com.values.map { it.animalCategory } else emptyList())
         base.copy(
+            counts = categories.groupingBy { it }.eachCount(),
+            totalCount = categories.size,
             community = comList,
             liveUsers = liveList,
             layers = lay,

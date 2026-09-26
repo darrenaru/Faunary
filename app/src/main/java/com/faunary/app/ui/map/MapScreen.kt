@@ -37,6 +37,12 @@ import androidx.compose.material.icons.rounded.Pets
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.Icon
+import androidx.compose.animation.animateColorAsState
+import com.faunary.app.ui.components.FaunaryIcons
+import androidx.compose.ui.unit.sp
+import com.faunary.app.ui.components.MapRoundButton
+import com.faunary.app.ui.components.MapRoundIconButton
+import com.faunary.app.ui.components.MapZoomControl
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DirectionsCar
@@ -226,7 +232,7 @@ fun MapScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 item {
-                    SelectableChip("Semua", state.filter == null, { viewModel.setFilter(null) }, icon = Icons.Rounded.Pets, count = state.all.size)
+                    SelectableChip("Semua", state.filter == null, { viewModel.setFilter(null) }, icon = Icons.Rounded.Pets, count = state.totalCount)
                 }
                 AnimalCategory.entries.forEach { cat ->
                     val count = state.counts[cat] ?: 0
@@ -254,7 +260,8 @@ fun MapScreen(
         // Map controls
         Column(
             Modifier.align(Alignment.CenterEnd).padding(end = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             if (state.online) {
                 LayersButton(
@@ -275,12 +282,7 @@ fun MapScreen(
                     viewModel.refreshLocation { controller.flyTo(it.latitude, it.longitude, 16.0) }
                 } else locationPermission.request()
             })
-            Column(
-                Modifier.softShadow(RoundedCornerShape(14.dp), 4.dp).clip(RoundedCornerShape(14.dp)).background(c.surface),
-            ) {
-                SurfaceIconButton(Icons.Rounded.Add, "Perbesar", { controller.zoomBy(1.0) })
-                SurfaceIconButton(Icons.Rounded.Remove, "Perkecil", { controller.zoomBy(-1.0) })
-            }
+            MapZoomControl(onZoomIn = { controller.zoomBy(1.0) }, onZoomOut = { controller.zoomBy(-1.0) })
         }
 
         // Bottom area: permission rationale, empty hint or selected preview
@@ -473,22 +475,17 @@ private fun SightingPreviewCard(
 @Composable
 private fun DimensionToggle(threeD: Boolean, onClick: () -> Unit) {
     val c = FaunaryTheme.colors
-    val shape = RoundedCornerShape(14.dp)
-    Box(
-        Modifier
-            .softShadow(shape, 4.dp)
-            .size(44.dp)
-            .clip(shape)
-            .background(if (threeD) c.primary else c.surface)
-            .border(1.dp, if (threeD) c.primary else c.border, shape)
-            .clickable(onClickLabel = if (threeD) "Tampilkan peta 2D" else "Tampilkan peta 3D", onClick = onClick),
-        contentAlignment = Alignment.Center,
+    val bg by animateColorAsState(if (threeD) c.primary else c.surface, tween(200), label = "3dBg")
+    val fg by animateColorAsState(if (threeD) c.onPrimary else c.primary, tween(200), label = "3dFg")
+    MapRoundButton(
+        contentDescription = if (threeD) "Tampilkan peta 2D" else "Tampilkan peta 3D",
+        onClick = onClick,
+        background = bg,
     ) {
-        Text(
-            "3D",
-            style = MaterialTheme.typography.labelLarge,
-            color = if (threeD) c.onPrimary else c.brand,
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(FaunaryIcons.Cube, null, Modifier.size(20.dp), tint = fg)
+            Text("3D", style = MaterialTheme.typography.labelSmall.copy(lineHeight = 12.sp), color = fg)
+        }
     }
 }
 
@@ -558,68 +555,6 @@ private fun LiveUserCard(user: LiveUser, here: GeoPoint?, onRoute: () -> Unit, m
         Spacer(Modifier.height(14.dp))
         FaunaryButton("Rute ke Sini", onRoute, Modifier.fillMaxWidth(), kind = ButtonKind.Secondary, icon = Icons.Rounded.Directions, height = 46.dp)
     }
-}
-
-/** Layer switcher: own finds, community finds, live explorers + the user's own live-sharing toggle. */
-@Composable
-private fun LayersButton(
-    layers: MapLayers,
-    communityCount: Int,
-    liveCount: Int,
-    shareLive: Boolean,
-    onLayers: (MapLayers) -> Unit,
-    onShareLive: (Boolean) -> Unit,
-) {
-    val c = FaunaryTheme.colors
-    var open by remember { mutableStateOf(false) }
-    Box {
-        SurfaceIconButton(Icons.Rounded.Layers, "Lapisan peta", { open = true })
-        if (liveCount > 0) {
-            Text(
-                "$liveCount",
-                style = MaterialTheme.typography.labelSmall,
-                color = c.onPrimary,
-                modifier = Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp)
-                    .clip(CircleShape).background(c.secondary).padding(horizontal = 5.dp, vertical = 1.dp),
-            )
-        }
-        DropdownMenu(open, { open = false }, shape = RoundedCornerShape(18.dp), containerColor = c.surface) {
-            Text("Tampilkan di peta", style = MaterialTheme.typography.labelMedium, color = c.foregroundMuted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
-            LayerItem("Temuan saya", c.primary, layers.own) { onLayers(layers.copy(own = it)) }
-            LayerItem("Temuan komunitas ($communityCount)", c.info, layers.community) { onLayers(layers.copy(community = it)) }
-            LayerItem("Penjelajah online ($liveCount)", c.secondary, layers.live) { onLayers(layers.copy(live = it)) }
-            HorizontalDivider(color = c.border)
-            DropdownMenuItem(
-                text = {
-                    Column {
-                        Text("Bagikan lokasi live saya", color = c.foreground)
-                        Text("Hanya saat aplikasi terbuka", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
-                    }
-                },
-                trailingIcon = {
-                    Switch(
-                        checked = shareLive,
-                        onCheckedChange = onShareLive,
-                        colors = SwitchDefaults.colors(checkedThumbColor = c.onPrimary, checkedTrackColor = c.primary),
-                    )
-                },
-                onClick = { onShareLive(!shareLive) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun LayerItem(label: String, dot: androidx.compose.ui.graphics.Color, checked: Boolean, onChange: (Boolean) -> Unit) {
-    val c = FaunaryTheme.colors
-    DropdownMenuItem(
-        text = { Text(label, color = c.foreground) },
-        leadingIcon = { Box(Modifier.size(12.dp).clip(CircleShape).background(dot)) },
-        trailingIcon = {
-            Checkbox(checked, onChange, colors = CheckboxDefaults.colors(checkedColor = c.primary, checkmarkColor = c.onPrimary))
-        },
-        onClick = { onChange(!checked) },
-    )
 }
 
 @Composable

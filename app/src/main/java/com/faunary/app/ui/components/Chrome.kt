@@ -24,12 +24,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -39,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -222,6 +225,60 @@ fun EmptyState(
     }
 }
 
+/** Size of the round floating map controls (layers, 3D, locate, zoom). */
+val MapControlSize = 50.dp
+
+/** Round, borderless floating map button with a soft shadow. */
+@Composable
+fun MapRoundButton(
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    background: Color = FaunaryTheme.colors.surface,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier
+            .softShadow(CircleShape, 6.dp)
+            .size(MapControlSize)
+            .clip(CircleShape)
+            .background(background)
+            .clickable(role = Role.Button, onClickLabel = contentDescription, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
+
+@Composable
+fun MapRoundIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tint: Color = FaunaryTheme.colors.brand,
+) = MapRoundButton(contentDescription, onClick, modifier) {
+    Icon(icon, contentDescription, Modifier.size(24.dp), tint = tint)
+}
+
+/** Zoom in/out stacked in one vertical capsule. */
+@Composable
+fun MapZoomControl(onZoomIn: () -> Unit, onZoomOut: () -> Unit, modifier: Modifier = Modifier) {
+    val c = FaunaryTheme.colors
+    val shape = RoundedCornerShape(50)
+    Column(
+        modifier.softShadow(shape, 6.dp).width(MapControlSize).clip(shape).background(c.surface),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        listOf(Triple(Icons.Rounded.Add, "Perbesar", onZoomIn), Triple(Icons.Rounded.Remove, "Perkecil", onZoomOut)).forEach { (icon, label, action) ->
+            Box(
+                Modifier.fillMaxWidth().height(MapControlSize + 2.dp).clickable(role = Role.Button, onClickLabel = label, onClick = action),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, label, Modifier.size(24.dp), tint = c.brand)
+            }
+        }
+    }
+}
+
 @Composable
 fun LocateButton(onClick: () -> Unit, modifier: Modifier = Modifier) =
-    SurfaceIconButton(Icons.Rounded.MyLocation, "Lokasi saya", onClick, modifier, tint = FaunaryTheme.colors.primary)
+    MapRoundIconButton(Icons.Rounded.MyLocation, "Lokasi saya", onClick, modifier, tint = FaunaryTheme.colors.primary)

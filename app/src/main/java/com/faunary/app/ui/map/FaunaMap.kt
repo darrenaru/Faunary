@@ -26,6 +26,7 @@ import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.EdgeInsets
 import com.mapbox.maps.MapInitOptions
+import com.mapbox.maps.LayerPosition
 import com.mapbox.maps.MapView
 import com.mapbox.maps.toCameraOptions
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
@@ -94,6 +95,9 @@ private const val HEARTBEAT_RING_MS = 1_200L
 private const val HEARTBEAT_POP_MS = 320L
 /** Duration of the glide from a live explorer's previous position to the new one. */
 private const val LIVE_GLIDE_MS = 1_200L
+
+/** Layer id of the Mapbox location puck (see LocationComponentConstants). */
+private const val PUCK_LAYER = "mapbox-location-indicator-layer"
 
 /** Camera tilt used in 3D mode. */
 const val Pitch3D = 58.0
@@ -298,6 +302,24 @@ fun FaunaMap(
             locationPuck = createDefault2DPuck(withBearing = false)
             pulsingEnabled = true
             pulsingColor = 0xFFDF6D41.toInt()
+            // Soft accuracy halo makes "you are here" readable even next to photo markers.
+            showAccuracyRing = true
+            accuracyRingColor = 0x334A90E2.toInt()
+            accuracyRingBorderColor = 0x804A90E2.toInt()
+        }
+    }
+
+    // "You are here" must never hide under animal photos: annotation layers are added after the
+    // location layer (and re-added on style reloads), so keep moving the puck to the very top.
+    LaunchedEffect(showUserLocation, managers, routeManager, pulseManager, markers, darkTheme, threeD) {
+        if (!showUserLocation) return@LaunchedEffect
+        repeat(4) {
+            val style = mapView.mapboxMap.style
+            if (style != null && style.styleLayerExists(PUCK_LAYER)) {
+                val top = style.styleLayers.lastOrNull()?.id
+                if (top != PUCK_LAYER) style.moveStyleLayer(PUCK_LAYER, LayerPosition(null, null, null))
+            }
+            delay(500) // the puck layer can be (re)created shortly after the style/annotations
         }
     }
 

@@ -39,6 +39,7 @@ import com.mapbox.maps.plugin.annotation.annotations
 import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationManager
 import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationOptions
 import com.mapbox.maps.plugin.annotation.generated.OnPointAnnotationClickListener
+import com.mapbox.maps.plugin.annotation.generated.PointAnnotation
 import com.mapbox.maps.plugin.annotation.generated.PolylineAnnotationManager
 import com.mapbox.maps.plugin.annotation.generated.PolylineAnnotationOptions
 import com.mapbox.maps.plugin.annotation.generated.createPolylineAnnotationManager
@@ -91,6 +92,8 @@ val DefaultCenter = GeoPoint(-6.1990, 106.8322)
 private const val HEARTBEAT_PERIOD_MS = 3_000L
 private const val HEARTBEAT_RING_MS = 1_200L
 private const val HEARTBEAT_POP_MS = 320L
+/** Duration of the glide from a live explorer's previous position to the new one. */
+private const val LIVE_GLIDE_MS = 1_200L
 
 /** Camera tilt used in 3D mode. */
 const val Pitch3D = 58.0
@@ -305,8 +308,9 @@ fun FaunaMap(
     }
 
     // One effect per layer so a live-position tick doesn't redraw every photo marker.
+    // Live explorers are handled separately below so they can glide instead of being recreated.
     val byKind = markers.groupBy { it.kind }
-    MarkerKind.entries.forEach { kind ->
+    MarkerKind.entries.filter { it != MarkerKind.LIVE }.forEach { kind ->
         val layer = byKind[kind].orEmpty()
         val layerSelected = selectedKey?.takeIf { k -> layer.any { it.key == k } }
         key(kind) {
@@ -328,6 +332,61 @@ fun FaunaMap(
             }
         }
     }
+
+    // Live explorers: keep one annotation per person and animate it to each new position.
+    val liveAnnotations = remember { mutableMapOf<String, PointAnnotation>() }
+    val liveMarkers = byKind[MarkerKind.LIVE].orEmpty()
+    val liveSelected = selectedKey?.takeIf { k -> liveMarkers.any { it.key == k } }
+    LaunchedEffect(managers, liveMarkers, liveSelected, colors.isDark) {
+        val m = managers[MarkerKind.LIVE] ?: return@LaunchedEffect
+        val wanted = liveMarkers.associateBy { it.key }
+        // People who left
+        (liveAnnotations.keys - wanted.keys).forEach { k ->
+            liveAnnotations.remove(k)?.let { m.delete(it); annotationToKey.remove(it.id) }
+        }
+        val glides = mutableListOf<Triple<PointAnnotation, Point, Point>>()
+        for (marker in liveMarkers) {
+            val target = Point.fromLngLat(marker.longitude, marker.latitude)
+            val selected = marker.key == liveSelected
+            val icon = withContext(Dispatchers.IO) { markerFactory.marker(marker, selected, colors.isDark) }
+            val existing = liveAnnotations[marker.key]
+            if (existing == null) {
+                val created = m.create(
+                    PointAnnotationOptions().withPoint(target).withIconImage(icon)
+                        .withSymbolSortKey(if (selected) 10.0 else 0.0),
+                )
+                liveAnnotations[marker.key] = created
+                annotationToKey[created.id] = marker.key
+            } else {
+                existing.iconImageBitmap = icon
+                existing.symbolSortKey = if (selected) 10.0 else 0.0
+                val from = existing.point
+                if (from.latitude() != target.latitude() || from.longitude() != target.longitude()) {
+                    glides += Triple(existing, from, target)
+                } else {
+                    m.update(existing)
+                }
+            }
+        }
+        if (glides.isEmpty()) return@LaunchedEffect
+        // Ease each moved marker from where it is to its new position. A newer update cancels this
+        // effect mid-way; the next run starts from the marker's current (partly moved) position.
+        val start = withFrameMillis { it }
+        var t = 0f
+        while (t < 1f) {
+            t = ((withFrameMillis { it } - start).toFloat() / LIVE_GLIDE_MS).coerceIn(0f, 1f)
+            val e = if (t < 0.5f) 4 * t * t * t else 1 - (-2 * t + 2).pow(3) / 2 // ease-in-out cubic
+            glides.forEach { (a, from, to) ->
+                a.point = Point.fromLngLat(
+                    from.longitude() + (to.longitude() - from.longitude()) * e,
+                    from.latitude() + (to.latitude() - from.latitude()) * e,
+                )
+            }
+            m.update(glides.map { it.first })
+        }
+    }
+    // Style reloads (dark mode, 3D) recreate managers; drop stale handles so markers are recreated.
+    LaunchedEffect(managers) { liveAnnotations.clear() }
 
     // In-app route: soft light casing + Canyon line, then fit the whole route on screen.
     LaunchedEffect(routeManager, route, colors.isDark) {
@@ -352,25 +411,30 @@ fun FaunaMap(
         map.easeTo(camera, MapAnimationOptions.mapAnimationOptions { duration(900) })
     }
 
-    // Heartbeat for live explorers, every HEARTBEAT_PERIOD_MS. Restarts when someone moves or joins.
-    val livePoints = markers.filter { it.kind == MarkerKind.LIVE }.map { Triple(it.key, it.latitude, it.longitude) }
-    LaunchedEffect(pulseManager, managers, livePoints) {
+    // Heartbeat for live explorers, every HEARTBEAT_PERIOD_MS. Rings follow the avatars every frame,
+    // so they keep pulsing around someone while they glide; restarts only when people join/leave.
+    val liveKeys = liveMarkers.map { it.key }.toSet()
+    LaunchedEffect(pulseManager, managers, liveKeys) {
         val rings = pulseManager ?: return@LaunchedEffect
         val liveLayer = managers[MarkerKind.LIVE] ?: return@LaunchedEffect
         rings.deleteAll()
-        if (livePoints.isEmpty()) return@LaunchedEffect
-        val circles = rings.create(livePoints.map { (_, lat, lng) ->
+        if (liveKeys.isEmpty()) return@LaunchedEffect
+        // Wait until the glide effect has created this round's annotations.
+        while (isActive && !liveKeys.all { it in liveAnnotations }) withFrameMillis { }
+        val order = liveKeys.toList()
+        val circles = rings.create(order.map { k ->
             CircleAnnotationOptions()
-                .withPoint(Point.fromLngLat(lng, lat))
+                .withPoint(liveAnnotations.getValue(k).point)
                 .withCircleColor("#AAA648")
                 .withCircleRadius(0.0)
                 .withCircleOpacity(0.0)
         })
+        fun followAvatars() = order.forEachIndexed { i, k -> liveAnnotations[k]?.let { circles[i].point = it.point } }
         try {
             while (isActive) {
                 val start = withFrameMillis { it }
                 var elapsed = 0L
-                while (elapsed < HEARTBEAT_RING_MS) {
+                while (elapsed < HEARTBEAT_PERIOD_MS) {
                     elapsed = withFrameMillis { it } - start
                     val t = (elapsed.toFloat() / HEARTBEAT_RING_MS).coerceIn(0f, 1f)
                     val eased = 1f - (1f - t).pow(3)
@@ -378,15 +442,17 @@ fun FaunaMap(
                         it.circleRadius = 18.0 + 30.0 * eased
                         it.circleOpacity = 0.5 * (1f - t)
                     }
+                    followAvatars()
                     rings.update(circles)
-                    // Avatar "pop": quick swell and settle at the start of each beat.
-                    val pop = (elapsed.toFloat() / HEARTBEAT_POP_MS).coerceIn(0f, 1f)
-                    val scale = 1.0 + 0.14 * sin(pop * Math.PI)
-                    val avatars = liveLayer.annotations
-                    avatars.forEach { it.iconSize = scale }
-                    liveLayer.update(avatars)
+                    if (elapsed <= HEARTBEAT_POP_MS + 50) {
+                        // Avatar "pop": quick swell and settle at the start of each beat.
+                        val pop = (elapsed.toFloat() / HEARTBEAT_POP_MS).coerceIn(0f, 1f)
+                        val scale = 1.0 + 0.14 * sin(pop * Math.PI)
+                        val avatars = liveLayer.annotations
+                        avatars.forEach { it.iconSize = scale }
+                        liveLayer.update(avatars)
+                    }
                 }
-                delay(HEARTBEAT_PERIOD_MS - HEARTBEAT_RING_MS)
             }
         } finally {
             circles.forEach { it.circleOpacity = 0.0 }

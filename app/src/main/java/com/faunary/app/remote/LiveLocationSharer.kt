@@ -7,6 +7,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.faunary.app.data.SettingsRepository
 import com.faunary.app.location.LocationRepository
+import com.faunary.app.util.Geo
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -58,16 +59,32 @@ class LiveLocationSharer @Inject constructor(
                     emptyFlow()
                 }
             }
-            .onEach { publish(it.first, it.second, it.third) }
+            .onEach { (lat, lng, acc) -> if (shouldPublish(lat, lng)) publish(lat, lng, acc) }
             .launchIn(scope)
+    }
+
+    private var lastSent: Triple<Double, Double, Long>? = null
+
+    /**
+     * GPS arrives every ~5 s; send it when the explorer has moved [MOVE_THRESHOLD_M] or more, and
+     * otherwise at least every [HEARTBEAT_MS] so standing still doesn't look like leaving.
+     */
+    private fun shouldPublish(lat: Double, lng: Double): Boolean {
+        val now = System.currentTimeMillis()
+        val prev = lastSent
+        val moved = prev == null || Geo.distanceMeters(prev.first, prev.second, lat, lng) >= MOVE_THRESHOLD_M
+        val stale = prev == null || now - prev.third >= HEARTBEAT_MS
+        if (!moved && !stale) return false
+        lastSent = Triple(lat, lng, now)
+        return true
     }
 
     @SuppressLint("MissingPermission")
     private fun locationUpdates() = callbackFlow {
-        // No minimum distance: a fix every 30s doubles as a heartbeat, so explorers standing still
-        // (e.g. waiting for a bird) don't fall past the server's 5-minute freshness window.
-        val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 30_000)
-            .setMinUpdateIntervalMillis(15_000)
+        // GPS-grade fixes every ~5 s (only while the app is open and sharing is on);
+        // shouldPublish() decides which ones are worth sending.
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, FIX_INTERVAL_MS)
+            .setMinUpdateIntervalMillis(FIX_INTERVAL_MS / 2)
             .build()
         val callback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
@@ -89,6 +106,7 @@ class LiveLocationSharer @Inject constructor(
     }
 
     private fun stopSharing() {
+        lastSent = null
         val client = supabase.client ?: return
         val uid = supabase.currentUserId() ?: return
         scope.launch {
@@ -96,3 +114,7 @@ class LiveLocationSharer @Inject constructor(
         }
     }
 }
+
+private const val FIX_INTERVAL_MS = 5_000L
+private const val MOVE_THRESHOLD_M = 10.0
+private const val HEARTBEAT_MS = 30_000L

@@ -46,8 +46,7 @@ final class FaunaMapboxView: NSObject, NativeMapView {
             self?.listener?.onCameraChanged(latitude: camera.center.latitude, longitude: camera.center.longitude, zoom: Double(camera.zoom))
         }.store(in: &cancelables)
         mapView.mapboxMap.onMapIdle.observe { [weak self] _ in
-            guard let self else { return }
-            let map = self.mapView.mapboxMap
+            guard let self, let map = self.mapView.mapboxMap else { return }
             let bounds = map.coordinateBounds(for: CameraOptions(cameraState: map.cameraState))
             self.listener?.onCameraIdle(
                 south: bounds.southwest.latitude, west: bounds.southwest.longitude,

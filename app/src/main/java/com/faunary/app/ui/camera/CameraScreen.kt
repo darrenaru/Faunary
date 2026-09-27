@@ -1,9 +1,6 @@
 package com.faunary.app.ui.camera
 
 import android.Manifest
-import com.faunary.app.location.GeoPoint
-import com.faunary.app.location.GpsAccuracy
-import com.faunary.app.ui.components.FaunaryIcons
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -68,9 +65,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
-import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.faunary.app.location.GeoPoint
+import com.faunary.app.location.GpsAccuracy
+import com.faunary.app.ui.components.FaunaryIcons
 import com.faunary.app.ui.components.PermissionCard
 import com.faunary.app.ui.theme.Buttercream
 import com.faunary.app.ui.theme.Canyon
@@ -81,6 +80,7 @@ import com.faunary.app.util.Format
 import com.faunary.app.util.LocationPermissions
 import com.faunary.app.util.findActivity
 import com.faunary.app.util.rememberPermissionState
+import org.koin.compose.viewmodel.koinViewModel
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -89,7 +89,7 @@ fun CameraScreen(
     onBack: () -> Unit,
     /** [fix] is the GPS position at the shutter press, or null if there was no fresh one. */
     onPhotoReady: (path: String, fix: GeoPoint?) -> Unit,
-    viewModel: CameraViewModel = hiltViewModel(),
+    viewModel: CameraViewModel = koinViewModel(),
 ) {
     val c = FaunaryTheme.colors
     val context = LocalContext.current

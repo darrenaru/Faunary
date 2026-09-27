@@ -44,7 +44,7 @@
             android:name=".update.InstallResultReceiver"
             android:exported="false" />
 
-        <!-- WorkManager is initialised on demand with Hilt's worker factory (see FaunaryApp). -->
+        <!-- WorkManager is initialised on demand with Koin's worker factory (see FaunaryApp). -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"

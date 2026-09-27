@@ -1,0 +1,64 @@
+# XcodeGen spec: the CI runner generates iosApp.xcodeproj from this, so no Xcode project is checked in.
+name: iosApp
+options:
+  bundleIdPrefix: com.faunary
+  deploymentTarget:
+    iOS: "16.0"
+packages:
+  MapboxMaps:
+    url: https://github.com/mapbox/mapbox-maps-ios.git
+    exactVersion: 11.31.0
+targets:
+  iosApp:
+    type: application
+    scheme: {}
+    platform: iOS
+    sources:
+      - iosApp
+    dependencies:
+      - package: MapboxMaps
+    info:
+      path: iosApp/Info.plist
+      properties:
+        CFBundleDisplayName: Faunary
+        # Public Mapbox token, read by the SDK; set from the MAPBOX_ACCESS_TOKEN build setting (CI secret).
+        MBXAccessToken: $(MAPBOX_ACCESS_TOKEN)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        NSLocationWhenInUseUsageDescription: Faunary memakai lokasimu untuk mencatat di mana satwa ditemukan dan menampilkan jarak ke temuan.
+        # Asked when only "approximate location" is allowed (key used by IosLocationSource).
+        NSLocationTemporaryUsageDescriptionDictionary:
+          FindLocation: Temuan ditandai tepat di titik kamu memotretnya, jadi dibutuhkan lokasi akurat.
+        NSCameraUsageDescription: Faunary memakai kamera untuk memotret satwa yang kamu temukan.
+        NSPhotoLibraryUsageDescription: Faunary membuka galeri foto saat kamera tidak tersedia.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # Background refresh: sync and new likes/comments (IosBackgroundTasks.REFRESH_TASK_ID).
+        UIBackgroundModes:
+          - fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.faunary.app.refresh
+        # Lets Compose render at 120 Hz on ProMotion screens.
+        CADisableMinimumFrameDurationOnPhone: true
+    settings:
+      base:
+        PRODUCT_NAME: Faunary
+        PRODUCT_BUNDLE_IDENTIFIER: com.faunary.app
+        MARKETING_VERSION: "1.0"
+        MAPBOX_ACCESS_TOKEN: ""
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        FRAMEWORK_SEARCH_PATHS: $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -framework
+          - Shared
+    preBuildScripts:
+      - name: Build Kotlin framework
+        basedOnDependencyAnalysis: false
+        script: |
+          cd "$SRCROOT/.."
+          ./gradlew :shared:embedAndSignAppleFrameworkForXcode

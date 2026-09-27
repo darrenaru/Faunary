@@ -13,8 +13,6 @@ import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlin.math.max
 import kotlin.math.min
 
@@ -25,8 +23,7 @@ import kotlin.math.min
  * classes, so each detected box is cropped and passed to the image labeler (400+ labels incl.
  * Cat/Dog/Bird). If no box yields an animal, the whole frame is labelled as a fallback.
  */
-@Singleton
-class OnDeviceAnimalDetector @Inject constructor() {
+class OnDeviceAnimalDetector {
 
     private val objectDetector by lazy {
         ObjectDetection.getClient(

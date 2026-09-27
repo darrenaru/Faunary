@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Faunary"
 include(":app")
+include(":shared")

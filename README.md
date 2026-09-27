@@ -19,7 +19,7 @@ Faunary adalah jurnal pribadi untuk mencatat hewan yang kamu temui. Kamu memotre
 | Bagian | Teknologi |
 |---|---|
 | UI | Jetpack Compose + Material 3, font Inter & Fraunces |
-| Arsitektur | MVVM (ViewModel + StateFlow), Hilt |
+| Arsitektur | MVVM (ViewModel + StateFlow), Koin, Kotlin Multiplatform (modul `shared`) |
 | Kamera | CameraX (`LifecycleCameraController`) |
 | AI | Online: Edge Function `identify-animal` meneruskan foto ke Gemini, yang mengembalikan nama spesies dalam bahasa Indonesia, kategori, dan kotak deteksi. Offline (atau saat kuota habis): ML Kit Object Detection + Image Labeling di perangkat. |
 | Peta | Mapbox Maps SDK v11 dengan style hangat dan proyeksi globe (lihat `MapStyle.kt`); foto yang berdekatan digabung jadi tumpukan |

@@ -7,7 +7,6 @@ import android.os.Build
 import android.util.Log
 import androidx.core.content.edit
 import com.faunary.app.BuildConfig
-import dagger.hilt.android.qualifiers.ApplicationContext
 import io.sigpipe.jbsdiff.Patch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,8 +22,6 @@ import java.io.FileInputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
-import javax.inject.Inject
-import javax.inject.Singleton
 
 // ---- Manifest published by tools/release.py as app-releases/latest.json ----
 
@@ -91,8 +88,7 @@ data class UpdateState(
  * installed APK when one exists (a few MB) or the full split APK otherwise, verifies SHA-256, and
  * keeps the result ready for [UpdateInstaller].
  */
-@Singleton
-class UpdateRepository @Inject constructor(@ApplicationContext private val context: Context) {
+class UpdateRepository(private val context: Context) {
 
     private val prefs = context.getSharedPreferences("faunary_update", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }

@@ -5,36 +5,34 @@ import android.content.Intent
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.edit
-import com.faunary.app.notify.InteractionNotifier
-import com.faunary.app.update.MandatoryUpdateScreen
-import com.faunary.app.update.UpdateRepository
-import com.faunary.app.update.UpdateScheduler
-import com.faunary.app.ui.navigation.NotificationOpen
-import com.faunary.app.util.hasPermission
-import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.core.content.edit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.faunary.app.data.SettingsRepository
 import com.faunary.app.data.ThemeMode
+import com.faunary.app.notify.InteractionNotifier
 import com.faunary.app.ui.navigation.FaunaryNavHost
+import com.faunary.app.ui.navigation.NotificationOpen
 import com.faunary.app.ui.theme.FaunaryTheme
-import dagger.hilt.android.AndroidEntryPoint
-import javax.inject.Inject
+import com.faunary.app.update.MandatoryUpdateScreen
+import com.faunary.app.update.UpdateRepository
+import com.faunary.app.update.UpdateScheduler
+import com.faunary.app.util.hasPermission
+import kotlinx.coroutines.flow.MutableStateFlow
+import org.koin.android.ext.android.inject
 
-@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    @Inject lateinit var settingsRepository: SettingsRepository
-    @Inject lateinit var updateRepository: UpdateRepository
-    @Inject lateinit var updateScheduler: UpdateScheduler
+    private val settingsRepository: SettingsRepository by inject()
+    private val updateRepository: UpdateRepository by inject()
+    private val updateScheduler: UpdateScheduler by inject()
 
     /** Set when a notification was tapped; the nav host opens it and clears it. */
     private val notificationOpen = MutableStateFlow<NotificationOpen?>(null)

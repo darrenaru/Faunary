@@ -11,7 +11,6 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.edit
-import androidx.hilt.work.HiltWorker
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.work.Constraints
@@ -31,9 +30,6 @@ import com.faunary.app.R
 import com.faunary.app.remote.AppNotification
 import com.faunary.app.remote.NotificationRepository
 import com.faunary.app.util.hasPermission
-import dagger.assisted.Assisted
-import dagger.assisted.AssistedInject
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -55,29 +51,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.TimeUnit
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * Likes/comments on the user's finds: keeps the in-app inbox current and posts a system
  * notification (who + the photo) for each new one. Realtime while the app is open, and a
  * WorkManager check every ~15 minutes otherwise (there is no push server).
  */
-@Singleton
-class InteractionNotifier @Inject constructor(
-    @ApplicationContext private val context: Context,
+class InteractionNotifier(
+    private val context: Context,
     private val repo: NotificationRepository,
-) {
+) : NotificationInbox {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val prefs = context.getSharedPreferences("faunary_notifications", Context.MODE_PRIVATE)
     private val postLock = Mutex()
 
     private val _items = MutableStateFlow<List<AppNotification>>(emptyList())
-    val items: StateFlow<List<AppNotification>> = _items.asStateFlow()
-    val unreadCount: StateFlow<Int> = _items.map { list -> list.count { !it.isRead } }
+    override val items: StateFlow<List<AppNotification>> = _items.asStateFlow()
+    override val unreadCount: StateFlow<Int> = _items.map { list -> list.count { !it.isRead } }
         .stateIn(scope, SharingStarted.Eagerly, 0)
 
-    val isAvailable: Boolean get() = repo.isAvailable
+    override val isAvailable: Boolean get() = repo.isAvailable
 
     @OptIn(ExperimentalCoroutinesApi::class)
     fun start() {
@@ -96,22 +89,21 @@ class InteractionNotifier @Inject constructor(
             .launchIn(scope)
     }
 
-    /** Reloads the inbox and posts system notifications for anything new. @return false on failure. */
-    suspend fun refresh(): Boolean {
+    override suspend fun refresh(): Boolean {
         val list = repo.list() ?: return false
         _items.value = list
         postNew(list)
         return true
     }
 
-    fun markAllRead() {
+    override fun markAllRead() {
         val now = System.currentTimeMillis().toString()
         _items.update { list -> list.map { if (it.isRead) it else it.copy(readAt = now) } }
         NotificationManagerCompat.from(context).cancelAll()
         scope.launch { repo.markAllRead() }
     }
 
-    fun markRead(id: String) {
+    override fun markRead(id: String) {
         _items.update { list -> list.map { if (it.id == id && !it.isRead) it.copy(readAt = "now") else it } }
         NotificationManagerCompat.from(context).cancel(id.hashCode())
         scope.launch { repo.markRead(id) }
@@ -222,10 +214,9 @@ class InteractionNotifier @Inject constructor(
 }
 
 /** Background check for new likes/comments while the app is closed (WorkManager minimum: 15 min). */
-@HiltWorker
-class NotificationWorker @AssistedInject constructor(
-    @Assisted context: Context,
-    @Assisted params: WorkerParameters,
+class NotificationWorker(
+    context: Context,
+    params: WorkerParameters,
     private val notifier: InteractionNotifier,
 ) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = if (notifier.refresh()) Result.success() else Result.retry()

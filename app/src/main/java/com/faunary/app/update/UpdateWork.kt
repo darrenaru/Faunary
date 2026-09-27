@@ -9,7 +9,6 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
-import androidx.hilt.work.HiltWorker
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -22,24 +21,19 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.faunary.app.BuildConfig
-import dagger.assisted.Assisted
-import dagger.assisted.AssistedInject
-import dagger.hilt.android.AndroidEntryPoint
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
 import java.util.concurrent.TimeUnit
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * Two kinds of runs: a "check" (tiny JSON, any network) that downloads right away when data is
  * cheap, and a "download" constrained to Wi-Fi unless the user allowed mobile data.
  */
-@HiltWorker
-class UpdateWorker @AssistedInject constructor(
-    @Assisted context: Context,
-    @Assisted params: WorkerParameters,
+class UpdateWorker(
+    context: Context,
+    params: WorkerParameters,
     private val updates: UpdateRepository,
     private val scheduler: UpdateScheduler,
 ) : CoroutineWorker(context, params) {
@@ -58,8 +52,7 @@ class UpdateWorker @AssistedInject constructor(
     }
 }
 
-@Singleton
-class UpdateScheduler @Inject constructor(@ApplicationContext private val context: Context) {
+class UpdateScheduler(private val context: Context) {
     private val wm get() = WorkManager.getInstance(context)
 
     private val enabled get() = BuildConfig.SUPABASE_URL.isNotBlank() && !BuildConfig.DEBUG
@@ -100,9 +93,8 @@ class UpdateScheduler @Inject constructor(@ApplicationContext private val contex
 }
 
 /** Hands a verified APK to the system installer (the user confirms with one tap). */
-@Singleton
-class UpdateInstaller @Inject constructor(
-    @ApplicationContext private val context: Context,
+class UpdateInstaller(
+    private val context: Context,
     private val updates: UpdateRepository,
 ) {
     /** Android 8+: the user must allow Faunary to install apps once. */
@@ -143,9 +135,8 @@ class UpdateInstaller @Inject constructor(
 }
 
 /** Receives the installer status; shows the system confirmation dialog when it's needed. */
-@AndroidEntryPoint
-class InstallResultReceiver : BroadcastReceiver() {
-    @Inject lateinit var updates: UpdateRepository
+class InstallResultReceiver : BroadcastReceiver(), KoinComponent {
+    private val updates: UpdateRepository by inject()
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {

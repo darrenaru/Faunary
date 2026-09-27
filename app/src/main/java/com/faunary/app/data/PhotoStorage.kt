@@ -5,28 +5,24 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import androidx.exifinterface.media.ExifInterface
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlin.math.max
-
-data class StoredPhoto(val path: String, val width: Int, val height: Int)
 
 /**
  * Keeps photos in app-private storage (scoped storage, never shared).
  * Every photo is normalised to an upright JPEG so bounding boxes line up with what is drawn.
  */
-@Singleton
-class PhotoStorage @Inject constructor(@ApplicationContext private val context: Context) {
+class PhotoStorage(private val context: Context) : PhotoProcessor {
 
     private val dir: File get() = File(context.filesDir, "photos").apply { mkdirs() }
 
     fun newCaptureFile(): File = File(dir, "capture_${System.currentTimeMillis()}.jpg")
+
+    override suspend fun normalize(sourcePath: String): StoredPhoto = normalize(File(sourcePath))
 
     /**
      * Rotates according to EXIF, downsizes to [maxSize] px and rewrites as a clean JPEG.
@@ -82,7 +78,7 @@ class PhotoStorage @Inject constructor(@ApplicationContext private val context: 
             ?: error("Foto tidak valid")
     }
 
-    fun delete(path: String) {
+    override fun delete(path: String) {
         runCatching { File(path).takeIf { it.parentFile == dir }?.delete() }
     }
 }

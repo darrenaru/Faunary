@@ -1,0 +1,67 @@
+# Builds an unsigned Faunary .ipa on a macOS runner. Download it from the run's artifacts and
+# install it with Sideloadly/AltStore, which re-sign it with your Apple ID.
+name: iOS build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  ipa:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          cd iosApp && xcodegen generate
+
+      - name: Build app (unsigned)
+        # Compiled into FaunaryConfig by the shared module (the Mapbox token also into Info.plist);
+        # without Supabase the app runs offline-only, without Mapbox the map stays blank.
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
+        run: |
+          VERSION_NAME=$(grep '^VERSION_NAME=' version.properties | cut -d= -f2)
+          VERSION_CODE=$(grep '^VERSION_CODE=' version.properties | cut -d= -f2)
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          xcodebuild build \
+            -project iosApp/iosApp.xcodeproj -scheme iosApp -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/ios \
+            MARKETING_VERSION="$VERSION_NAME" CURRENT_PROJECT_VERSION="$VERSION_CODE" \
+            MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+
+      - name: Package .ipa
+        run: |
+          mkdir -p build/ipa/Payload
+          cp -R build/ios/Build/Products/Release-iphoneos/Faunary.app build/ipa/Payload/
+          cd build/ipa && zip -qry "Faunary-$VERSION_NAME-unsigned.ipa" Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Faunary-${{ env.VERSION_NAME }}-ios-unsigned
+          path: build/ipa/*.ipa
+          if-no-files-found: error

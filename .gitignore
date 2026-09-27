@@ -13,3 +13,10 @@
 *.keystore
 __pycache__/
 *.pyc
+
+# iOS (the Xcode project is generated from iosApp/project.yml)
+iosApp/iosApp.xcodeproj/
+iosApp/iosApp/Info.plist
+/shared/build/
+xcuserdata/
+DerivedData/

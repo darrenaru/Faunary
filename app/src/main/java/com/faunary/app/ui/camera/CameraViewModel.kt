@@ -6,7 +6,6 @@ import com.faunary.app.data.PhotoStorage
 import com.faunary.app.location.GeoPoint
 import com.faunary.app.location.GpsAccuracy
 import com.faunary.app.location.LocationRepository
-import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -17,10 +16,8 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import java.io.File
-import javax.inject.Inject
 
-@HiltViewModel
-class CameraViewModel @Inject constructor(
+class CameraViewModel(
     private val photos: PhotoStorage,
     private val location: LocationRepository,
 ) : ViewModel() {

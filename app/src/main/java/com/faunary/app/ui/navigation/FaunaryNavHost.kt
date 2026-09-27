@@ -14,16 +14,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.faunary.app.ui.notifications.NotificationsScreen
-import com.faunary.app.ui.notifications.NotificationsViewModel
-import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -41,8 +37,14 @@ import com.faunary.app.ui.detail.DetailScreen
 import com.faunary.app.ui.gallery.GalleryScreen
 import com.faunary.app.ui.journal.JournalScreen
 import com.faunary.app.ui.map.MapScreen
+import com.faunary.app.ui.notifications.NotificationsScreen
+import com.faunary.app.ui.notifications.NotificationsViewModel
 import com.faunary.app.ui.profile.ProfileScreen
 import com.faunary.app.ui.review.ReviewScreen
+import com.faunary.app.update.AppUpdateBanner
+import com.faunary.app.update.AppUpdateSection
+import kotlinx.coroutines.flow.MutableStateFlow
+import org.koin.compose.viewmodel.koinViewModel
 
 private fun NavDestination?.tab(): MainTab? = when {
     this == null -> null
@@ -75,8 +77,8 @@ fun FaunaryNavHost(
 ) {
     val backStack by navController.currentBackStackEntryAsState()
     val currentTab = backStack?.destination.tab()
-    // Turn-by-turn navigation on the map takes the whole screen, so the tab bar steps aside.
-    var mapNavigating by remember { mutableStateOf(false) }
+    // Turn-by-turn navigation and search on the map take the whole screen, so the tab bar steps aside.
+    var mapFullScreen by remember { mutableStateOf(false) }
     val openDetail: (Long) -> Unit = { navController.navigate(DetailRoute(it)) }
     // Single top: a quick double tap must not stack two cameras.
     val openCamera: () -> Unit = { navController.navigate(CameraRoute) { launchSingleTop = true } }
@@ -87,7 +89,7 @@ fun FaunaryNavHost(
         }
     }
 
-    val notifications: NotificationsViewModel = hiltViewModel()
+    val notifications: NotificationsViewModel = koinViewModel()
     val unreadNotifications by notifications.unreadCount.collectAsStateWithLifecycle()
     val openCommunity: (String) -> Unit = { navController.navigate(CommunityDetailRoute(it)) }
     val pendingOpen by notificationOpen.collectAsState()
@@ -116,14 +118,15 @@ fun FaunaryNavHost(
                     onOpenDetail = openDetail,
                     onOpenCommunity = openCommunity,
                     onOpenCamera = openCamera,
-                    onNavigatingChange = { mapNavigating = it },
+                    onFullScreenChange = { mapFullScreen = it },
                     unreadNotifications = unreadNotifications,
                     onOpenNotifications = { navController.navigate(NotificationsRoute) { launchSingleTop = true } },
+                    updateBanner = { AppUpdateBanner(it) },
                 )
             }
             composable<GalleryRoute> { GalleryScreen(onOpenDetail = openDetail, onOpenCamera = openCamera) }
             composable<JournalRoute> { JournalScreen(onOpenDetail = openDetail, onOpenCamera = openCamera) }
-            composable<ProfileRoute> { ProfileScreen() }
+            composable<ProfileRoute> { ProfileScreen(updateSection = { AppUpdateSection() }) }
             composable<NotificationsRoute> {
                 NotificationsScreen(
                     onBack = { navController.popBackStack() },
@@ -182,7 +185,7 @@ fun FaunaryNavHost(
         }
 
         AnimatedVisibility(
-            visible = currentTab != null && !(currentTab == MainTab.Map && mapNavigating),
+            visible = currentTab != null && !(currentTab == MainTab.Map && mapFullScreen),
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = slideInVertically(tween(220)) { it } + fadeIn(tween(220)),
             exit = slideOutVertically(tween(180)) { it } + fadeOut(tween(180)),

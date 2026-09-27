@@ -11,9 +11,14 @@ final class FaunaMapFactory: NSObject, NativeMapFactory {
 
 final class FaunaMapboxView: NSObject, NativeMapView {
     private let mapView = MapView(frame: .zero)
-    // Created in draw order (bottom to top), as on Android: other explorers' routes, the route, then markers.
+    // Created in draw order (bottom to top), as on Android: heartbeat and deploy ripples, other explorers'
+    // routes and their destinations, the route and its drawing tip, then the markers.
+    private lazy var pulses = mapView.annotations.makeCircleAnnotationManager(id: "faunary-pulses")
+    private lazy var deployRings = mapView.annotations.makeCircleAnnotationManager(id: "faunary-deploys")
     private lazy var sharedRoutes = mapView.annotations.makePolylineAnnotationManager(id: "faunary-shared-routes")
+    private lazy var sharedDests = mapView.annotations.makeCircleAnnotationManager(id: "faunary-shared-dests")
     private lazy var route = mapView.annotations.makePolylineAnnotationManager(id: "faunary-route")
+    private lazy var routeTip = mapView.annotations.makeCircleAnnotationManager(id: "faunary-route-tip")
     private lazy var markers: PointAnnotationManager = {
         let manager = mapView.annotations.makePointAnnotationManager(id: "faunary-markers")
         // Kotlin groups overlapping photos into stacks itself; every marker stays visible.
@@ -22,14 +27,20 @@ final class FaunaMapboxView: NSObject, NativeMapView {
         return manager
     }()
     private var cancelables = Set<AnyCancelable>()
+    /// Shared markers being deployed: a view pinned at the spot, and the pin image inside it that moves.
+    private var deployPins: [String: (annotation: ViewAnnotation, pin: UIImageView)] = [:]
 
     var listener: NativeMapListener?
     var view: UIView { mapView }
 
     override init() {
         super.init()
+        _ = pulses
+        _ = deployRings
         _ = sharedRoutes
+        _ = sharedDests
         _ = route
+        _ = routeTip
         _ = markers
         mapView.ornaments.options.scaleBar.visibility = .hidden
         mapView.ornaments.options.compass.visibility = .hidden
@@ -106,13 +117,70 @@ final class FaunaMapboxView: NSObject, NativeMapView {
         }
     }
 
-    func setRoute(coordinates: [KotlinDouble], color: String) {
+    func setRoute(coordinates: [KotlinDouble], color: String, casingColor: String) {
         let points = Self.coordinates(coordinates)
-        route.annotations = points.count < 2 ? [] : [Self.line(points, color: color, width: 6)]
+        guard points.count >= 2 else {
+            route.annotations = []
+            return
+        }
+        // A light casing under the orange line, as on Android.
+        route.annotations = [Self.line(points, color: casingColor, width: 9), Self.line(points, color: color, width: 5)]
     }
 
     func setSharedRoutes(routes: [[KotlinDouble]], color: String) {
-        sharedRoutes.annotations = routes.map(Self.coordinates).filter { $0.count >= 2 }.map { Self.line($0, color: color, width: 4) }
+        sharedRoutes.annotations = routes.map(Self.coordinates).filter { $0.count >= 2 }
+            .map { Self.line($0, color: color, width: 4, opacity: 0.85) }
+    }
+
+    func setCircles(layer: String, circles: [NativeCircle]) {
+        let manager: CircleAnnotationManager
+        switch layer {
+        case "pulses": manager = pulses
+        case "deploys": manager = deployRings
+        case "shared-dests": manager = sharedDests
+        default: manager = routeTip
+        }
+        manager.annotations = circles.map { circle in
+            var annotation = CircleAnnotation(centerCoordinate: CLLocationCoordinate2D(latitude: circle.latitude, longitude: circle.longitude))
+            annotation.circleRadius = circle.radius
+            annotation.circleColor = StyleColor(UIColor(hex: circle.color))
+            annotation.circleOpacity = circle.opacity
+            annotation.circleStrokeColor = StyleColor(UIColor(hex: circle.strokeColor))
+            annotation.circleStrokeWidth = circle.strokeWidth
+            annotation.circleStrokeOpacity = circle.strokeOpacity
+            return annotation
+        }
+    }
+
+    func showDeployPin(id: String, latitude: Double, longitude: Double, image: UIImage) {
+        removeDeployPin(id: id)
+        let size = image.size
+        // Room above for the drop; the pin's tip sits at the container's bottom centre (= the spot).
+        let container = UIView(frame: CGRect(x: 0, y: 0, width: size.width * 1.6, height: size.height * 1.4 + 60))
+        container.clipsToBounds = false
+        container.isUserInteractionEnabled = false
+        let pin = UIImageView(image: image)
+        pin.frame = CGRect(x: 0, y: 0, width: size.width, height: size.height)
+        pin.layer.anchorPoint = CGPoint(x: 0.5, y: 1)
+        pin.layer.position = CGPoint(x: container.bounds.midX, y: container.bounds.maxY)
+        pin.alpha = 0
+        container.addSubview(pin)
+        let annotation = ViewAnnotation(coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude), view: container)
+        annotation.variableAnchors = [ViewAnnotationAnchorConfig(anchor: .bottom)]
+        annotation.allowOverlap = true
+        annotation.allowOverlapWithPuck = true
+        mapView.viewAnnotations.add(annotation)
+        deployPins[id] = (annotation, pin)
+    }
+
+    func updateDeployPin(id: String, offsetY: Double, scale: Double, alpha: Double) {
+        guard let pin = deployPins[id]?.pin else { return }
+        pin.transform = CGAffineTransform(translationX: 0, y: offsetY).scaledBy(x: scale, y: scale)
+        pin.alpha = alpha
+    }
+
+    func removeDeployPin(id: String) {
+        deployPins.removeValue(forKey: id)?.annotation.remove()
     }
 
     func setUserLocationVisible(visible: Bool) {
@@ -135,10 +203,11 @@ final class FaunaMapboxView: NSObject, NativeMapView {
         }
     }
 
-    private static func line(_ points: [CLLocationCoordinate2D], color: String, width: Double) -> PolylineAnnotation {
+    private static func line(_ points: [CLLocationCoordinate2D], color: String, width: Double, opacity: Double = 1) -> PolylineAnnotation {
         var line = PolylineAnnotation(lineCoordinates: points)
         line.lineColor = StyleColor(UIColor(hex: color))
         line.lineWidth = width
+        line.lineOpacity = opacity
         line.lineJoin = .round
         return line
     }

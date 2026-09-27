@@ -481,7 +481,8 @@ fun MapScreen(
                 )
             }
             AnimatedVisibility(
-                visible = state.loaded && state.all.isEmpty() && routeUi == null && place == null && (locationPermission.granted || locationDismissed),
+                // Only when nothing at all is on the map: no own finds, others' finds, markers or explorers.
+                visible = state.loaded && state.all.isEmpty() && state.community.isEmpty() && state.pins.isEmpty() && state.liveUsers.isEmpty() && routeUi == null && place == null && (locationPermission.granted || locationDismissed),
                 enter = fadeIn(tween(200)), exit = fadeOut(tween(150)),
             ) {
                 FaunaryCard {

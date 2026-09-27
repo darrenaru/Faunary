@@ -41,11 +41,29 @@ interface NativeMapView {
     /** Replaces every marker. */
     fun setMarkers(markers: List<NativeMarker>)
 
-    /** The in-app route (lat,lng pairs); an empty list removes it. [color] is "#RRGGBB". */
-    fun setRoute(coordinates: List<Double>, color: String)
+    /**
+     * The in-app route (lat,lng pairs), drawn as a [color] line on a wider [casingColor] one; an empty
+     * list removes it. Colours are "#RRGGBB". Called every frame while the route is drawn in.
+     */
+    fun setRoute(coordinates: List<Double>, color: String, casingColor: String)
 
-    /** Other explorers' routes, one lat,lng list each. */
+    /** Other explorers' routes, one lat,lng list each, semi-transparent. */
     fun setSharedRoutes(routes: List<List<Double>>, color: String)
+
+    /**
+     * Replaces the circles of one [layer]: [LAYER_PULSES] and [LAYER_DEPLOYS] (under everything),
+     * [LAYER_SHARED_DESTS] (with the shared routes) or [LAYER_ROUTE_TIP] (above the route, under markers).
+     * Called every frame while animating.
+     */
+    fun setCircles(layer: String, circles: List<NativeCircle>)
+
+    /** A shared marker being deployed, as a view pinned at its tip, animated by [updateDeployPin]. */
+    fun showDeployPin(id: String, latitude: Double, longitude: Double, image: UIImage)
+
+    /** Moves the pin up by [offsetY] points (negative = up), scaled from its tip, at [alpha]. */
+    fun updateDeployPin(id: String, offsetY: Double, scale: Double, alpha: Double)
+
+    fun removeDeployPin(id: String)
 
     /** The blue location puck (Mapbox's own, with the compass heading). */
     fun setUserLocationVisible(visible: Boolean)
@@ -78,6 +96,23 @@ class NativeMarker(
     /** Higher draws on top. */
     val sortKey: Double,
 )
+
+/** A circle drawn by the map (radius and stroke in points). */
+class NativeCircle(
+    val latitude: Double,
+    val longitude: Double,
+    val radius: Double,
+    val color: String,
+    val opacity: Double,
+    val strokeColor: String = color,
+    val strokeWidth: Double = 0.0,
+    val strokeOpacity: Double = 0.0,
+)
+
+const val LAYER_PULSES = "pulses"
+const val LAYER_DEPLOYS = "deploys"
+const val LAYER_SHARED_DESTS = "shared-dests"
+const val LAYER_ROUTE_TIP = "route-tip"
 
 fun interface NativeMapFactory {
     fun createMapView(): NativeMapView

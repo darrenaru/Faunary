@@ -75,8 +75,8 @@ actual class FaunaMapController actual constructor() {
 
 /**
  * The Faunary map on iOS: Mapbox through the Swift bridge ([NativeMaps]), with the same style JSON,
- * markers and grouping as Android. Not yet on iOS: the route draw-in and heartbeat animations,
- * fanning out small stacks (every stack opens its list) and deploy animations.
+ * markers, grouping and animations (MapAnimations.kt) as Android. Not on iOS: fanning out small
+ * stacks (every stack opens its list), the avatar pop of the heartbeat and live explorers gliding.
  */
 @Composable
 actual fun FaunaMap(
@@ -194,15 +194,18 @@ actual fun FaunaMap(
         native.setMarkers(list)
     }
 
-    val routeColor = "#DF6D41"
-    val routeBottom = routeBottomPadding
-    LaunchedEffect(native, route) {
-        native.setRoute(route.orEmpty().flatMap { listOf(it.first, it.second) }, routeColor)
-        if (route != null && fitRoute) controller.fit(route, routeBottom.value * UIScreen.mainScreen.scale)
+    RouteLine(native, route, routeDrawnAt, fitRoute, darkTheme) { pts ->
+        // Framed as on Android: the whole route between the header and the route card.
+        val side = 48.0
+        native.fitCoordinates(
+            pts.flatMap { listOf(it.first, it.second) },
+            top = routeTopPadding.value.toDouble(), left = side, bottom = routeBottomPadding.value.toDouble(), right = side,
+            pitch = if (threeD) 45.0 else 0.0, maxZoom = 17.0,
+        )
     }
-    LaunchedEffect(native, sharedRoutes) {
-        native.setSharedRoutes(sharedRoutes.map { line -> line.points.flatMap { listOf(it.first, it.second) } }, "#7395BF")
-    }
+    SharedRouteLines(native, sharedRoutes, darkTheme)
+    LiveHeartbeat(native, markers.filter { it.kind == MarkerKind.LIVE })
+    DeployAnimations(native, art, deploys, darkTheme)
 
     UIKitView(factory = { native.view }, modifier = modifier)
 }

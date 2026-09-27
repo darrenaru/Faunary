@@ -348,6 +348,7 @@ fun MapScreen(
             },
             onCameraIdle = viewModel::onCameraIdle,
             route = if (navigating) routeUi?.remaining ?: routeUi?.route?.points else routeUi?.route?.points,
+            routeDestination = routeUi?.let { it.destLat to it.destLng },
             fitRoute = !navigating,
             routeDrawnAt = routeUi?.drawnAt ?: 0L,
             sharedRoutes = state.sharedRoutes.map { SharedRouteLine(it.userId, it.points, it.destLat, it.destLng, it.startedAt) },

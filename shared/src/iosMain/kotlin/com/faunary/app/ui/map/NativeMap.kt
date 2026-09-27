@@ -47,6 +47,9 @@ interface NativeMapView {
      */
     fun setRoute(coordinates: List<Double>, color: String, casingColor: String)
 
+    /** Dashed line from where the route ends on the road to an off-road destination; empty removes it. */
+    fun setRouteConnector(coordinates: List<Double>, color: String)
+
     /** Other explorers' routes, one lat,lng list each, semi-transparent. */
     fun setSharedRoutes(routes: List<List<Double>>, color: String)
 

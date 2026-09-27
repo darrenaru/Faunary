@@ -75,13 +75,14 @@ private fun tipCircle(point: Pair<Double, Double>, color: String) =
     NativeCircle(point.first, point.second, radius = 6.0, color = color, opacity = 1.0, strokeColor = "#FFFFFF", strokeWidth = 2.5, strokeOpacity = 1.0)
 
 /**
- * The in-app route: a casing plus the orange line. A route that was just shown is drawn in along the
+ * The in-app route: a casing plus the orange line, and a dashed connector to a [destination] off the road. A route that was just shown is drawn in along the
  * road with a glowing tip; while navigating ([fitRoute] false) the line is only updated in place.
  */
 @Composable
 internal fun RouteLine(
     native: NativeMapView,
     route: List<Pair<Double, Double>>?,
+    destination: Pair<Double, Double>?,
     routeDrawnAt: Long,
     fitRoute: Boolean,
     darkTheme: Boolean,
@@ -91,8 +92,11 @@ internal fun RouteLine(
     val casing = if (darkTheme) "#29231F" else "#FBF8F1"
     LaunchedEffect(native, route, darkTheme) {
         val pts = route
+        // The dashed road-to-destination stretch, shown once the line itself is complete.
+        val connector = routeConnector(pts, destination)?.flat().orEmpty()
         if (pts == null || pts.size < 2) {
             native.setRoute(emptyList(), ROUTE_COLOR, casing)
+            native.setRouteConnector(emptyList(), ROUTE_COLOR)
             native.setCircles(LAYER_ROUTE_TIP, emptyList())
             return@LaunchedEffect
         }
@@ -101,8 +105,10 @@ internal fun RouteLine(
         if (fitRoute) onFit(pts)
         if (!drawIn) {
             native.setRoute(pts.flat(), ROUTE_COLOR, casing)
+            native.setRouteConnector(connector, ROUTE_COLOR)
             return@LaunchedEffect
         }
+        native.setRouteConnector(emptyList(), ROUTE_COLOR)
         val duration = routeDrawMs(lengthOf(pts)).toFloat()
         try {
             val start = withFrameMillis { it }
@@ -113,6 +119,7 @@ internal fun RouteLine(
                 native.setCircles(LAYER_ROUTE_TIP, listOf(tipCircle(part.last(), ROUTE_COLOR)))
                 if (t >= 1f) break
             }
+            native.setRouteConnector(connector, ROUTE_COLOR)
         } finally {
             native.setCircles(LAYER_ROUTE_TIP, emptyList())
         }

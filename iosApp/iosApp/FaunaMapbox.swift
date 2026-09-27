@@ -18,6 +18,14 @@ final class FaunaMapboxView: NSObject, NativeMapView {
     private lazy var sharedRoutes = mapView.annotations.makePolylineAnnotationManager(id: "faunary-shared-routes")
     private lazy var sharedDests = mapView.annotations.makeCircleAnnotationManager(id: "faunary-shared-dests")
     private lazy var route = mapView.annotations.makePolylineAnnotationManager(id: "faunary-route")
+    private lazy var routeConnector: PolylineAnnotationManager = {
+        let manager = mapView.annotations.makePolylineAnnotationManager(id: "faunary-route-connector")
+        // Dashes are a property of the whole layer, so the connector has its own manager (in line widths).
+        manager.lineDasharray = [1.6, 1.4]
+        // Off-road destinations are often inside a building: stay visible through 3D buildings.
+        manager.lineOcclusionOpacity = 0.7
+        return manager
+    }()
     private lazy var routeTip = mapView.annotations.makeCircleAnnotationManager(id: "faunary-route-tip")
     private lazy var markers: PointAnnotationManager = {
         let manager = mapView.annotations.makePointAnnotationManager(id: "faunary-markers")
@@ -40,10 +48,14 @@ final class FaunaMapboxView: NSObject, NativeMapView {
         _ = sharedRoutes
         _ = sharedDests
         _ = route
+        _ = routeConnector
         _ = routeTip
         _ = markers
         mapView.ornaments.options.scaleBar.visibility = .hidden
-        mapView.ornaments.options.compass.visibility = .hidden
+        // Turning and tilting with two fingers is on (the SDK default), e.g. to look behind a building;
+        // the compass appears once the map is turned and faces north again when tapped.
+        mapView.ornaments.options.compass.visibility = .adaptive
+        mapView.ornaments.options.compass.margins = CGPoint(x: 16, y: 150)
         mapView.gestures.delegate = self
 
         mapView.gestures.onMapTap.observe { [weak self] _ in
@@ -127,6 +139,12 @@ final class FaunaMapboxView: NSObject, NativeMapView {
         route.annotations = [Self.line(points, color: casingColor, width: 9), Self.line(points, color: color, width: 5)]
     }
 
+    func setRouteConnector(coordinates: [KotlinDouble], color: String) {
+        let points = Self.coordinates(coordinates)
+        // No per-line opacity: occlusion opacity only works when opacity isn't data-driven.
+        routeConnector.annotations = points.count < 2 ? [] : [Self.line(points, color: color, width: 3.5, opacity: nil)]
+    }
+
     func setSharedRoutes(routes: [[KotlinDouble]], color: String) {
         sharedRoutes.annotations = routes.map(Self.coordinates).filter { $0.count >= 2 }
             .map { Self.line($0, color: color, width: 4, opacity: 0.85) }
@@ -203,11 +221,11 @@ final class FaunaMapboxView: NSObject, NativeMapView {
         }
     }
 
-    private static func line(_ points: [CLLocationCoordinate2D], color: String, width: Double, opacity: Double = 1) -> PolylineAnnotation {
+    private static func line(_ points: [CLLocationCoordinate2D], color: String, width: Double, opacity: Double? = 1) -> PolylineAnnotation {
         var line = PolylineAnnotation(lineCoordinates: points)
         line.lineColor = StyleColor(UIColor(hex: color))
         line.lineWidth = width
-        line.lineOpacity = opacity
+        if let opacity { line.lineOpacity = opacity }
         line.lineJoin = .round
         return line
     }

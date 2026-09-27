@@ -2,6 +2,7 @@ package com.faunary.app.ui.map
 
 import com.faunary.app.domain.AnimalCategory
 import com.faunary.app.location.GeoPoint
+import com.faunary.app.util.Geo
 
 /**
  * Map layers, drawn bottom to top in declaration order. Live explorers sit at the bottom:
@@ -42,3 +43,18 @@ data class SharedRouteLine(
 
 /** Default camera when there is no data or GPS yet (Taman Suropati, Jakarta — as in the design). */
 val DefaultCenter = GeoPoint(-6.1990, 106.8322)
+
+/** A destination further than this from the end of its route (on the road) gets a dashed connector. */
+const val ROUTE_CONNECTOR_MIN_M = 10.0
+
+/**
+ * The dashed last stretch from where [route] ends on the road to [destination] (a spot off the road, in
+ * a park, behind a building…), or null when the road already reaches it.
+ */
+fun routeConnector(route: List<Pair<Double, Double>>?, destination: Pair<Double, Double>?): List<Pair<Double, Double>>? {
+    val end = route?.lastOrNull() ?: return null
+    val dest = destination ?: return null
+    if (route.size < 2) return null
+    val gap = Geo.distanceMeters(end.first, end.second, dest.first, dest.second)
+    return if (gap > ROUTE_CONNECTOR_MIN_M) listOf(end, dest) else null
+}

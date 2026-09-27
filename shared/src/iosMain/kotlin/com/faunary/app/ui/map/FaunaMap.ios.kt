@@ -96,6 +96,7 @@ actual fun FaunaMap(
     onCameraIdle: ((Bounds) -> Unit)?,
     onStackClick: ((List<String>, Double, Double) -> Unit)?,
     route: List<Pair<Double, Double>>?,
+    routeDestination: Pair<Double, Double>?,
     routeTopPadding: Dp,
     routeBottomPadding: Dp,
     fitRoute: Boolean,
@@ -194,7 +195,7 @@ actual fun FaunaMap(
         native.setMarkers(list)
     }
 
-    RouteLine(native, route, routeDrawnAt, fitRoute, darkTheme) { pts ->
+    RouteLine(native, route, routeDestination, routeDrawnAt, fitRoute, darkTheme) { pts ->
         // Framed as on Android: the whole route between the header and the route card.
         val side = 48.0
         native.fitCoordinates(

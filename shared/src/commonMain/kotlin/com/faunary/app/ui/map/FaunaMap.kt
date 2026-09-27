@@ -63,6 +63,11 @@ expect fun FaunaMap(
     onStackClick: ((List<String>, Double, Double) -> Unit)? = null,
     /** In-app route to draw, as (lat, lng) points; the camera fits it once when it changes. */
     route: List<Pair<Double, Double>>? = null,
+    /**
+     * Where the route really ends. Routes stop on the nearest road; when that is more than
+     * [ROUTE_CONNECTOR_MIN_M] from here, a dashed line joins the road to it (see [routeConnector]).
+     */
+    routeDestination: Pair<Double, Double>? = null,
     routeTopPadding: Dp = 0.dp,
     routeBottomPadding: Dp = 0.dp,
     /** False while navigating: the route line is updated in place and the camera is left to [FaunaMapController.setNavigationCamera]. */

@@ -225,21 +225,12 @@ class LiveRouteRepository(
         const val TAG = "FaunaryLiveRoute"
         const val PUBLISH_INTERVAL_MS = 5_000L
         const val HEARTBEAT_MS = 20_000L
-        const val MIN_SPACING_M = 8.0
         const val MAX_POINTS = 400
 
-        /** Drops points closer than [MIN_SPACING_M] (ends kept) and thins long routes to [MAX_POINTS]. */
-        fun simplify(points: List<Pair<Double, Double>>): List<Pair<Double, Double>> {
-            if (points.size <= 2) return points
-            val kept = mutableListOf(points.first())
-            for (i in 1 until points.size - 1) {
-                val last = kept.last()
-                if (Geo.distanceMeters(last.first, last.second, points[i].first, points[i].second) >= MIN_SPACING_M) kept += points[i]
-            }
-            kept += points.last()
-            if (kept.size <= MAX_POINTS) return kept
-            val step = kept.size.toDouble() / (MAX_POINTS - 1)
-            return (0 until MAX_POINTS - 1).map { kept[(it * step).toInt()] } + kept.last()
-        }
+        /**
+         * The route as sent: at most [MAX_POINTS], keeping its shape so it still follows the roads on
+         * other explorers' maps (thinning by index used to cut corners on long routes).
+         */
+        fun simplify(points: List<Pair<Double, Double>>): List<Pair<Double, Double>> = Geo.simplifyLine(points, MAX_POINTS)
     }
 }

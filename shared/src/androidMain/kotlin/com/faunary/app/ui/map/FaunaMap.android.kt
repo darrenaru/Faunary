@@ -118,6 +118,12 @@ private const val ROUTE_COLOR = "#DF6D41"
 /** Only a route shown within this long (ms) is drawn in; older ones (e.g. on opening the map later) appear at once. */
 private const val ROUTE_DRAW_FRESH_MS = 15_000L
 
+/** Dash pattern of the road-to-destination connector, in line widths. */
+private val CONNECTOR_DASHES = listOf(1.6, 1.4)
+
+private fun routeLength(points: List<Pair<Double, Double>>): Double =
+    (1 until points.size).sumOf { Geo.distanceMeters(points[it - 1].first, points[it - 1].second, points[it].first, points[it].second) }
+
 /** Draw-in time grows with the route's length: 1.2 s for a short walk up to 2.5 s for long drives. */
 private fun routeDrawMs(meters: Double): Long = (1_200 + meters / 5_000 * 1_300).toLong().coerceIn(1_200, 2_500)
 
@@ -208,6 +214,9 @@ private const val PUCK_LAYER = "mapbox-location-indicator-layer"
 
 /** Camera tilt used in 3D mode. */
 const val Pitch3D = 58.0
+
+/** Steepest tilt the user can reach with two fingers, low enough to look past buildings. */
+private const val MAX_TILT = 80.0
 
 /** Zoom at/below which the globe is shown head-on, and from which full 3D tilt is allowed again. */
 private const val GLOBE_FLAT_ZOOM = 2.0
@@ -306,6 +315,7 @@ actual fun FaunaMap(
     onStackClick: ((List<String>, Double, Double) -> Unit)?,
     /** In-app route to draw, as (lat, lng) points; the camera fits it once when it changes. */
     route: List<Pair<Double, Double>>?,
+    routeDestination: Pair<Double, Double>?,
     routeTopPadding: Dp,
     routeBottomPadding: Dp,
     /** False while navigating: the route line is updated in place and the camera is left to [FaunaMapController.follow]. */
@@ -361,6 +371,7 @@ actual fun FaunaMap(
     var managers by remember { mutableStateOf<Map<MarkerKind, PointAnnotationManager>>(emptyMap()) }
     var pulseManager by remember { mutableStateOf<CircleAnnotationManager?>(null) }
     var routeManager by remember { mutableStateOf<PolylineAnnotationManager?>(null) }
+    var connectorManager by remember { mutableStateOf<PolylineAnnotationManager?>(null) }
     var sharedRouteManager by remember { mutableStateOf<PolylineAnnotationManager?>(null) }
     var routeTipManager by remember { mutableStateOf<CircleAnnotationManager?>(null) }
     var sharedDestManager by remember { mutableStateOf<CircleAnnotationManager?>(null) }
@@ -458,6 +469,10 @@ actual fun FaunaMap(
                 sharedDestManager = mapView.annotations.createCircleAnnotationManager()
                 // Route line sits above the rings but below every marker.
                 routeManager = mapView.annotations.createPolylineAnnotationManager()
+                // Dashed last stretch from the road to a destination off it (dashes are a manager property).
+                connectorManager = mapView.annotations.createPolylineAnnotationManager().apply {
+                    lineDasharray = CONNECTOR_DASHES
+                }
                 // Glowing tip of a route line being drawn in.
                 routeTipManager = mapView.annotations.createCircleAnnotationManager()
                 // Legs of a fanned-out stack, under the pins.
@@ -480,14 +495,17 @@ actual fun FaunaMap(
     }
 
     // Tilt the camera in 3D; flatten and face north again in 2D. The first run has no animation
-    // because the initial camera options already carry the right pitch.
+    // because the initial camera options already carry the right pitch. Either way the user may turn
+    // and tilt the map freely with two fingers (e.g. to look behind a building); the compass shows
+    // once it's turned, and tapping it faces north again.
     var firstTilt by remember { mutableStateOf(true) }
     LaunchedEffect(threeD) {
         controller.threeD = threeD
-        mapView.gestures.pitchEnabled = threeD
-        mapView.gestures.rotateEnabled = threeD
+        mapView.gestures.pitchEnabled = true
+        mapView.gestures.rotateEnabled = true
         mapView.compass.updateSettings {
-            enabled = threeD
+            enabled = true
+            fadeWhenFacingNorth = true
             marginTop = with(density) { 180.dp.toPx() }
         }
         if (firstTilt) {
@@ -547,14 +565,14 @@ actual fun FaunaMap(
     }
 
     // Globe view: far out, a tilted camera pushes the globe off the bottom of the screen, so the
-    // allowed tilt shrinks with zoom (flat at zoom ≤ 2, full 3D tilt again from zoom 5).
+    // allowed tilt shrinks with zoom (flat at zoom ≤ 2, up to MAX_TILT again from zoom 5).
     // Navigation sets its own camera every frame and is left alone.
     LaunchedEffect(fitRoute) {
         if (!fitRoute) return@LaunchedEffect
         val map = mapView.mapboxMap
         val sub = map.subscribeCameraChanged {
             val cam = map.cameraState
-            val maxPitch = Pitch3D * ((cam.zoom - GLOBE_FLAT_ZOOM) / (GLOBE_TILT_ZOOM - GLOBE_FLAT_ZOOM)).coerceIn(0.0, 1.0)
+            val maxPitch = MAX_TILT * ((cam.zoom - GLOBE_FLAT_ZOOM) / (GLOBE_TILT_ZOOM - GLOBE_FLAT_ZOOM)).coerceIn(0.0, 1.0)
             if (cam.pitch > maxPitch + 0.5) map.setCamera(CameraOptions.Builder().pitch(maxPitch).build())
         }
         try {
@@ -695,6 +713,32 @@ actual fun FaunaMap(
     // In-app route: soft light casing + Canyon line, then fit the whole route on screen.
     // While navigating the line shrinks every fix, so the existing lines are moved instead of recreated.
     val routeLines = remember { mutableListOf<PolylineAnnotation>() }
+    // Dashed connector from the road to an off-road destination; shown once a fresh route has been drawn in.
+    LaunchedEffect(connectorManager, route, routeDestination) {
+        val m = connectorManager ?: return@LaunchedEffect
+        val connector = routeConnector(route, routeDestination)
+        if (connector == null) {
+            m.deleteAll()
+            return@LaunchedEffect
+        }
+        if (fitRoute) {
+            val drawEnd = routeDrawnAt + routeDrawMs(routeLength(route.orEmpty()))
+            val wait = drawEnd - System.currentTimeMillis()
+            if (wait in 1..ROUTE_DRAW_FRESH_MS) delay(wait)
+        }
+        val points = connector.map { (lat, lng) -> Point.fromLngLat(lng, lat) }
+        val line = m.annotations.firstOrNull()
+        if (line != null) {
+            line.points = points
+            m.update(line)
+        } else {
+            m.create(
+                // No per-line opacity: occlusion opacity only works when opacity isn't data-driven.
+                PolylineAnnotationOptions().withPoints(points).withLineColor(ROUTE_COLOR).withLineWidth(3.5),
+            )
+        }
+    }
+
     var routeLinesDark by remember { mutableStateOf<Boolean?>(null) }
     var drawnRoute by remember { mutableStateOf(0L) }
     LaunchedEffect(routeManager, route, colors.isDark) {

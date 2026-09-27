@@ -6,6 +6,8 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*']
+    # Until this workflow is on main (where "Run workflow" appears), pushes to the iOS branch build it.
+    branches: ['ios-kmp']
 
 jobs:
   ipa:

@@ -49,12 +49,17 @@ jobs:
           VERSION_NAME=$(grep '^VERSION_NAME=' version.properties | cut -d= -f2)
           VERSION_CODE=$(grep '^VERSION_CODE=' version.properties | cut -d= -f2)
           echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          # On failure, surface compiler errors (Swift and Kotlin) as annotations on the run page.
+          set -o pipefail
+          # (One annotation holding them all: GitHub keeps only 10 per step.)
+          trap 'echo "::error::$(grep -E "error:|^e: " build.log | sort -u | head -40 | awk "{printf \"%s%%0A\", \$0}")"' ERR
           xcodebuild build \
             -project iosApp/iosApp.xcodeproj -scheme iosApp -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/ios \
             MARKETING_VERSION="$VERSION_NAME" CURRENT_PROJECT_VERSION="$VERSION_CODE" \
             MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            2>&1 | tee build.log
 
       - name: Package .ipa
         run: |

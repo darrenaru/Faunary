@@ -19,9 +19,19 @@ import com.faunary.app.remote.Bounds
 import com.faunary.app.remote.CommunityRepository
 import com.faunary.app.remote.CommunitySighting
 import com.faunary.app.remote.LiveChange
+import com.faunary.app.remote.LiveRouteChange
+import com.faunary.app.remote.LiveRouteDto
+import com.faunary.app.remote.LiveRouteRepository
+import com.faunary.app.remote.SharedTrip
+import com.faunary.app.remote.MapPin
+import com.faunary.app.remote.PinChange
+import com.faunary.app.remote.PinError
+import com.faunary.app.remote.PinException
+import com.faunary.app.remote.PinRepository
 import com.faunary.app.remote.SightingChange
 import com.faunary.app.util.Geo
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -66,10 +76,51 @@ data class RouteUi(
     val remaining: List<Pair<Double, Double>>? = null,
     val rerouting: Boolean = false,
     val arrived: Boolean = false,
+    /** When this route was shown (a new route, not a silent reroute): its line is drawn in, here and for others. */
+    val drawnAt: Long = 0L,
+    /** Visible to others (live sharing on): from "Rute ke Sini" until it's closed, reached, or navigation ends. */
+    val shared: Boolean = true,
     val muted: Boolean = false,
 )
 
-data class MapLayers(val own: Boolean = true, val community: Boolean = true, val live: Boolean = true)
+/**
+ * A marker being deployed at a long-pressed spot, drawn and animated by the map as a single pin:
+ * the real marker ([pinId], once saved) stays hidden until the animation has settled on its spot.
+ */
+data class PinDeploy(val latitude: Double, val longitude: Double, val phase: Phase, val pinId: String? = null) {
+    enum class Phase {
+        DEPLOYING,
+        DEPLOYED,
+        /** Animation done and at rest: the real marker is shown underneath, then this pin is removed. */
+        SETTLING,
+        FAILED,
+    }
+
+    /** Whether [pin] is the one this deployment is drawing (so the map must not draw it twice). */
+    fun covers(pin: MapPin, me: String?): Boolean {
+        if (phase != Phase.DEPLOYING && phase != Phase.DEPLOYED) return false
+        if (pin.id == pinId) return true
+        // Realtime can deliver the new row before the insert call returns: match it by its spot. The
+        // server rounds coordinates to 15 significant digits, so compare within ~1 cm, not exactly.
+        return (me == null || pin.userId == me) &&
+            abs(pin.latitude - latitude) < SAME_SPOT_DEG && abs(pin.longitude - longitude) < SAME_SPOT_DEG
+    }
+
+    private companion object {
+        const val SAME_SPOT_DEG = 1e-7
+    }
+}
+
+/** Shortest the deploy animation runs, so a fast server doesn't turn it into a flicker. */
+private const val MIN_DEPLOY_MS = 1_600L
+/** How long the "deployed" pop and the failure fade play before the overlay goes. */
+private const val DEPLOY_OUTRO_MS = 700L
+/** Overlap of the resting animated pin and the real one, so the swap never leaves a gap. */
+private const val DEPLOY_HANDOFF_MS = 300L
+/** How long "Undo" is offered after a marker is deployed (e.g. after a mistaken long press). */
+private const val UNDO_DEPLOY_MS = 6_000L
+
+data class MapLayers(val own: Boolean = true, val community: Boolean = true, val live: Boolean = true, val pins: Boolean = true)
 
 sealed interface MapSelection {
     val key: String
@@ -85,11 +136,17 @@ sealed interface MapSelection {
     data class Live(val user: LiveUser) : MapSelection {
         override val key get() = liveKey(user.userId)
     }
+
+    /** A shared marker; [mine] = the viewer created it and may delete it. */
+    data class Pin(val pin: MapPin, val mine: Boolean) : MapSelection {
+        override val key get() = pinKey(pin.id)
+    }
 }
 
 fun ownKey(id: Long) = "own:$id"
 fun communityKey(id: String) = "com:$id"
 fun liveKey(id: String) = "live:$id"
+fun pinKey(id: String) = "pin:$id"
 
 private val LIVE_TTL_MS = TimeUnit.MINUTES.toMillis(5)
 /** Within this distance of the destination the trip counts as done. */
@@ -102,6 +159,10 @@ data class MapUiState(
     val visible: List<AnimalSighting> = emptyList(),
     val community: List<CommunitySighting> = emptyList(),
     val liveUsers: List<LiveUser> = emptyList(),
+    /** Shared markers (not affected by the animal filter). */
+    val pins: List<MapPin> = emptyList(),
+    /** Routes of explorers sharing their live location (shown with the live layer). */
+    val sharedRoutes: List<LiveRouteDto> = emptyList(),
     /** Per-category totals of everything the map can show (own + community, per enabled layer). */
     val counts: Map<AnimalCategory, Int> = emptyMap(),
     val totalCount: Int = 0,
@@ -122,6 +183,9 @@ data class MapUiState(
             if (layers.community) community.forEach {
                 add(MapMarker(communityKey(it.id), it.latitude, it.longitude, it.photoUrl, it.animalCategory, MarkerKind.COMMUNITY, time = it.takenAtMs))
             }
+            if (layers.pins) pins.forEach {
+                add(MapMarker(pinKey(it.id), it.latitude, it.longitude, null, AnimalCategory.OTHER, MarkerKind.PIN, it.displayTitle, pinIcon = PinIcon.fromKey(it.icon)))
+            }
             if (layers.live) liveUsers.forEach {
                 add(MapMarker(liveKey(it.userId), it.latitude, it.longitude, null, AnimalCategory.OTHER, MarkerKind.LIVE, it.name))
             }
@@ -136,6 +200,8 @@ class MapViewModel @Inject constructor(
     private val communityRepo: CommunityRepository,
     private val routes: RouteRepository,
     private val voice: VoiceGuide,
+    private val pinRepo: PinRepository,
+    private val liveRoutes: LiveRouteRepository,
 ) : ViewModel() {
 
     private val routeState = MutableStateFlow<RouteUi?>(null)
@@ -156,6 +222,20 @@ class MapViewModel @Inject constructor(
     private val layers = MutableStateFlow(MapLayers())
     private val community = MutableStateFlow<Map<String, CommunitySighting>>(emptyMap())
     private val live = MutableStateFlow<Map<String, LiveUser>>(emptyMap())
+    private val pins = MutableStateFlow<Map<String, MapPin>>(emptyMap())
+    private val otherRoutes = MutableStateFlow<Map<String, LiveRouteDto>>(emptyMap())
+    private val myId = MutableStateFlow<String?>(null)
+
+    /** The marker just deployed, while its "Undo" is on offer. */
+    private val _justDeployed = MutableStateFlow<String?>(null)
+    val justDeployed: StateFlow<String?> = _justDeployed.asStateFlow()
+
+    /** One-off feedback for marker actions (shown as a toast). */
+    private val _message = MutableStateFlow<String?>(null)
+    val message: StateFlow<String?> = _message.asStateFlow()
+    fun messageShown() {
+        _message.value = null
+    }
     private var lastBounds: Bounds? = null
     private var fetchJob: Job? = null
 
@@ -171,7 +251,17 @@ class MapViewModel @Inject constructor(
         )
     }
 
-    val state: StateFlow<MapUiState> = combine(own, community, live, layers, selectedKey) { base, com, liveMap, lay, sel ->
+    private val _deploy = MutableStateFlow<PinDeploy?>(null)
+    val deploy: StateFlow<PinDeploy?> = _deploy.asStateFlow()
+
+    private val shared = combine(pins, myId, _deploy, ::Triple)
+    private val view = combine(layers, selectedKey, ::Pair)
+
+    private val explorers = combine(live, otherRoutes, ::Pair)
+
+    val state: StateFlow<MapUiState> = combine(own, community, explorers, view, shared) { base, com, (liveMap, routeMap), (lay, sel), (pinMap, me, deploying) ->
+        // A marker still being deployed is drawn only by the deploy animation, never twice.
+        val pinList = pinMap.values.filterNot { deploying?.covers(it, me) == true }.sortedByDescending { it.createdAt }
         val comList = com.values.filter { base.filter == null || it.animalCategory == base.filter }
         val liveList = liveMap.values.toList()
         // Chip counts ignore the active filter (each chip shows its own total) but respect layers.
@@ -182,17 +272,74 @@ class MapViewModel @Inject constructor(
             totalCount = categories.size,
             community = comList,
             liveUsers = liveList,
+            pins = pinList,
+            sharedRoutes = if (lay.live) routeMap.values.toList() else emptyList(),
             layers = lay,
             selection = when {
                 sel == null -> null
                 sel.startsWith("own:") -> base.visible.firstOrNull { ownKey(it.id) == sel }?.let { MapSelection.Own(it) }
                 sel.startsWith("com:") -> comList.firstOrNull { communityKey(it.id) == sel }?.let { MapSelection.Community(it) }
+                sel.startsWith("pin:") -> pinList.firstOrNull { pinKey(it.id) == sel }?.let { MapSelection.Pin(it, mine = it.userId == me) }
                 else -> liveList.firstOrNull { liveKey(it.userId) == sel }?.let { MapSelection.Live(it) }
             },
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MapUiState(settings = settings.settings.value))
 
     init {
+        if (liveRoutes.isAvailable) {
+            // Share the own route from "Rute ke Sini" on (while live sharing is on; the repository decides);
+            // closing the route, ending navigation or arriving removes it from everyone's map …
+            viewModelScope.launch {
+                routeState.collect { r ->
+                    val route = r?.route
+                    liveRoutes.setTrip(
+                        if (route == null || r.arrived || !r.shared) null
+                        else SharedTrip(
+                            destLat = r.destLat, destLng = r.destLng, destLabel = r.label, mode = r.mode.profile,
+                            path = r.remaining ?: route.points,
+                            remainingMeters = r.progress?.remainingMeters ?: route.distanceMeters,
+                            startedAt = r.drawnAt,
+                        ),
+                    )
+                }
+            }
+            // … and follow everyone else's (realtime, plus a periodic refresh as a fallback).
+            viewModelScope.launch {
+                liveRoutes.changes().collect { change ->
+                    when (change) {
+                        is LiveRouteChange.Updated -> otherRoutes.update { it + (change.route.userId to change.route) }
+                        is LiveRouteChange.Ended -> otherRoutes.update { it - change.userId }
+                    }
+                }
+            }
+            // The server only returns routes refreshed in the last minute, so this also drops the route of
+            // an app that was killed mid-trip (no realtime event is sent for that).
+            viewModelScope.launch {
+                while (isActive) {
+                    otherRoutes.value = liveRoutes.others().associateBy { it.userId }
+                    delay(20_000)
+                }
+            }
+        }
+        if (pinRepo.isAvailable) {
+            viewModelScope.launch { myId.value = pinRepo.myId() }
+            viewModelScope.launch {
+                pinRepo.changes().collect { change ->
+                    when (change) {
+                        is PinChange.Upserted -> pins.update { it + (change.pin.id to change.pin) }
+                        is PinChange.Deleted -> pins.update { it - change.id }
+                    }
+                }
+            }
+            // Full list (replaced, so removals made while realtime was down disappear too).
+            viewModelScope.launch {
+                while (isActive) {
+                    val all = pinRepo.all()
+                    if (all != null) pins.value = all.associateBy { it.id }
+                    delay(if (all == null) 10_000 else 300_000)
+                }
+            }
+        }
         if (communityRepo.isAvailable) {
             viewModelScope.launch {
                 communityRepo.sightingChanges().collect { change ->
@@ -303,7 +450,13 @@ class MapViewModel @Inject constructor(
         navJob = null
         tracker = null
         voice.stop()
-        routeState.update { it?.copy(navigating = false, position = null, progress = null, remaining = null, rerouting = false, arrived = false) }
+        // Ending navigation also takes the route off everyone else's map (it stays drawn here).
+        routeState.update {
+            it?.copy(
+                navigating = false, position = null, progress = null, remaining = null, rerouting = false, arrived = false,
+                shared = it.shared && !it.navigating,
+            )
+        }
     }
 
     fun setMuted(muted: Boolean) {
@@ -367,6 +520,7 @@ class MapViewModel @Inject constructor(
 
     override fun onCleared() {
         voice.stop()
+        liveRoutes.setTrip(null)
     }
 
     /** Loads the route; while navigating this is a silent reroute from [origin] that keeps the old line until it succeeds. */
@@ -401,12 +555,10 @@ class MapViewModel @Inject constructor(
                 return@launch
             }
             routes.route(from, target.destLat, target.destLng, target.mode)
-                .onSuccess { r -> routeState.update { it?.copy(loading = false, route = r) } }
+                .onSuccess { r -> routeState.update { it?.copy(loading = false, route = r, drawnAt = System.currentTimeMillis(), shared = true) } }
                 .onFailure { routeState.update { it?.copy(loading = false, route = null, error = "Rute tidak bisa dimuat. Periksa koneksi internet lalu coba lagi.") } }
         }
     }
-
-    fun hasLocationPermission() = location.hasPermission()
 
     /** True exactly once per app launch: the map then opens on the globe and flies to the user. */
     fun takeIntro(): Boolean {
@@ -443,6 +595,87 @@ class MapViewModel @Inject constructor(
         val own = s.visible.associateBy { ownKey(it.id) }
         val com = s.community.associateBy { communityKey(it.id) }
         return keys.mapNotNull { k -> own[k]?.let { MapSelection.Own(it) } ?: com[k]?.let { MapSelection.Community(it) } }
+    }
+
+    val canCreatePins: Boolean get() = pinRepo.isAvailable
+
+    /**
+     * Long press: deploys a marker there. It goes to the server straight away (so everyone sees it in
+     * real time, unnamed) while the map plays the deploy animation; the creator then taps it to fill in
+     * the details. One deployment at a time.
+     */
+    fun deployPin(latitude: Double, longitude: Double) {
+        if (_deploy.value != null) return
+        _deploy.value = PinDeploy(latitude, longitude, PinDeploy.Phase.DEPLOYING)
+        viewModelScope.launch {
+            val started = System.currentTimeMillis()
+            val result = pinRepo.deploy(latitude, longitude)
+            delay((MIN_DEPLOY_MS - (System.currentTimeMillis() - started)).coerceAtLeast(0))
+            result
+                .onSuccess { pin ->
+                    pins.update { it + (pin.id to pin) }
+                    myId.value = pin.userId
+                    _deploy.value = PinDeploy(latitude, longitude, PinDeploy.Phase.DEPLOYED, pin.id)
+                    _message.value = "Penanda ter-deploy. Ketuk penanda untuk mengisi infonya."
+                }
+                .onFailure { e ->
+                    _deploy.value = PinDeploy(latitude, longitude, PinDeploy.Phase.FAILED)
+                    _message.value = when ((e as? PinException)?.error) {
+                        PinError.LIMIT -> "Batas 50 penanda tercapai. Hapus penanda lama untuk membuat yang baru."
+                        PinError.OFFLINE -> "Penanda butuh koneksi internet. Coba lagi saat online."
+                        else -> "Penanda gagal di-deploy. Periksa koneksi lalu coba lagi."
+                    }
+                }
+            delay(DEPLOY_OUTRO_MS)
+            if (result.isSuccess) {
+                // Resting animated pin + real pin underneath (identical), then drop the animated one.
+                _deploy.update { it?.copy(phase = PinDeploy.Phase.SETTLING) }
+                delay(DEPLOY_HANDOFF_MS)
+            }
+            _deploy.value = null
+            result.getOrNull()?.let { pin ->
+                _justDeployed.value = pin.id
+                delay(UNDO_DEPLOY_MS)
+                if (_justDeployed.value == pin.id) _justDeployed.value = null
+            }
+        }
+    }
+
+    /** Takes back the marker just deployed (a long press by mistake). */
+    fun undoDeploy() {
+        val id = _justDeployed.value ?: return
+        _justDeployed.value = null
+        deletePin(id)
+    }
+
+    /** The creator's details for a deployed marker; [onDone] gets true once saved. */
+    fun savePinDetails(id: String, title: String, note: String, icon: PinIcon, onDone: (Boolean) -> Unit) = viewModelScope.launch {
+        val saved = pinRepo.update(id, title, note, icon.key)
+        if (saved != null) {
+            pins.update { it + (saved.id to saved) }
+            selectedKey.value = pinKey(saved.id)
+            onDone(true)
+        } else {
+            _message.value = "Info penanda gagal disimpan. Periksa koneksi lalu coba lagi."
+            onDone(false)
+        }
+    }
+
+    /** A marker by its map key, if it's one of the viewer's own (to open its form on tap). */
+    fun ownPin(key: String): MapPin? {
+        val me = myId.value ?: return null
+        return pins.value[key.removePrefix("pin:")]?.takeIf { key.startsWith("pin:") && it.userId == me }
+    }
+
+    fun deletePin(id: String) = viewModelScope.launch {
+        if (_justDeployed.value == id) _justDeployed.value = null
+        if (pinRepo.delete(id)) {
+            pins.update { it - id }
+            if (selectedKey.value == pinKey(id)) selectedKey.value = null
+            _message.value = "Penanda dihapus"
+        } else {
+            _message.value = "Penanda gagal dihapus. Periksa koneksi lalu coba lagi."
+        }
     }
 
     fun select(key: String?) {

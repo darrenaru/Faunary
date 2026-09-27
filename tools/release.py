@@ -135,6 +135,7 @@ def main():
     storage = Storage(url, key)
 
     version_file = ROOT / "version.properties"
+    original_version = version_file.read_text(encoding="utf-8")
     version = read_props(version_file)
     code = int(version["VERSION_CODE"]) + (0 if args.no_bump else 1)
     if args.version_name:
@@ -149,7 +150,17 @@ def main():
         "# Bumped by tools/release.py on every release. VERSION_CODE must always increase.\n"
         f"VERSION_CODE={code}\nVERSION_NAME={name}\n", encoding="utf-8")
     print(f"==> Membangun versi {name} (code {code})")
+    try:
+        publish(storage, code, name, notes, args.mandatory)
+    except BaseException:
+        # Nothing went live (latest.json is uploaded last), so the next attempt reuses this number.
+        version_file.write_text(original_version, encoding="utf-8")
+        print("==> Rilis gagal; version.properties dikembalikan.")
+        raise
 
+
+def publish(storage, code, name, notes, mandatory):
+    """Builds the release APKs, uploads them with patches, then publishes latest.json (last)."""
     gradlew = ROOT / ("gradlew.bat" if os.name == "nt" else "gradlew")
     env = dict(os.environ, JAVA_HOME=os.environ.get("JAVA_HOME") or r"C:\Program Files\Android\Android Studio\jbr")
     subprocess.run([str(gradlew), ":app:assembleRelease", "--console=plain", "-q"], cwd=ROOT, check=True, env=env)
@@ -166,7 +177,7 @@ def main():
 
     work = ROOT / "build" / "release-cache"
     # Once a release is mandatory, later optional releases keep that floor.
-    min_code = code if args.mandatory else (current or {}).get("minVersionCode", 0)
+    min_code = code if mandatory else (current or {}).get("minVersionCode", 0)
     changelog = [{"versionCode": code, "versionName": name, "notes": notes,
                   "date": datetime.date.today().isoformat()}]
     changelog += [e for e in (current or {}).get("changelog", []) if e["versionCode"] < code]

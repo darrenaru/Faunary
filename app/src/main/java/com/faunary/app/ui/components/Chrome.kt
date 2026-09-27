@@ -5,6 +5,17 @@ import android.net.Uri
 import android.provider.Settings
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.runtime.State
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,12 +36,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.AutoStories
-import androidx.compose.material.icons.rounded.Map
-import androidx.compose.material.icons.rounded.MyLocation
-import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.PhotoCamera
-import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -49,13 +54,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.faunary.app.ui.theme.FaunaryTheme
 import com.faunary.app.ui.theme.Radius
-import kotlin.math.roundToInt
 
 enum class MainTab(val label: String, val icon: ImageVector) {
-    Map("Peta", Icons.Rounded.Map),
-    Gallery("Galeri", Icons.Rounded.PhotoLibrary),
-    Journal("Jurnal", Icons.Rounded.AutoStories),
-    Profile("Profil", Icons.Rounded.Person),
+    Map("Peta", FaunaryIcons.Maps),
+    Gallery("Galeri", FaunaryIcons.Gallery),
+    Journal("Jurnal", FaunaryIcons.Journal),
+    Profile("Profil", FaunaryIcons.User),
 }
 
 /** Floating bottom navigation with the raised Canyon camera action in the middle. */
@@ -68,6 +72,7 @@ fun FloatingBottomBar(
 ) {
     val c = FaunaryTheme.colors
     val shape = RoundedCornerShape(Radius.xl)
+    val camera = rememberTapBounce()
     Box(
         modifier
             .fillMaxWidth()
@@ -103,10 +108,18 @@ fun FloatingBottomBar(
                 .clip(CircleShape)
                 .background(c.primary)
                 .border(4.dp, c.surface, CircleShape)
-                .clickable(role = Role.Button, onClickLabel = "Ambil foto satwa", onClick = onCamera),
+                .clickable(
+                    interactionSource = camera.interaction,
+                    indication = null,
+                    role = Role.Button,
+                    onClickLabel = "Ambil foto satwa",
+                ) {
+                    camera.bounce()
+                    onCamera()
+                },
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Rounded.PhotoCamera, "Kamera", Modifier.size(26.dp), tint = c.onPrimary)
+            Icon(FaunaryIcons.Camera, "Kamera", Modifier.size(26.dp).then(camera.modifier), tint = c.onPrimary)
         }
     }
 }
@@ -117,42 +130,56 @@ private fun NavItem(tab: MainTab, current: MainTab?, onTab: (MainTab) -> Unit, m
     val selected = tab == current
     val tint by animateColorAsState(if (selected) c.primary else c.foregroundMuted, tween(200), label = "navTint")
     val pill by animateColorAsState(if (selected) c.primary.copy(alpha = 0.12f) else c.surface.copy(alpha = 0f), tween(200), label = "navPill")
+    val tap = rememberTapBounce()
     Column(
         modifier
             .clip(RoundedCornerShape(18.dp))
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Tab) { onTab(tab) }
+            .clickable(interactionSource = tap.interaction, indication = null, role = Role.Tab) {
+                tap.bounce()
+                onTab(tab)
+            }
             .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(Modifier.clip(CircleShape).background(pill).padding(horizontal = 14.dp, vertical = 3.dp)) {
-            Icon(tab.icon, null, Modifier.size(22.dp), tint = tint)
+            Icon(tab.icon, null, Modifier.size(22.dp).then(tap.modifier), tint = tint)
         }
         Spacer(Modifier.height(2.dp))
         Text(tab.label, style = MaterialTheme.typography.labelSmall, color = tint)
     }
 }
 
-@Composable
-fun GpsChip(accuracyMeters: Float?, modifier: Modifier = Modifier) {
-    val c = FaunaryTheme.colors
-    val ok = accuracyMeters != null
-    Row(
-        modifier
-            .softShadow(CircleShape, 3.dp)
-            .clip(CircleShape)
-            .background(c.surface)
-            .border(1.dp, c.border, CircleShape)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(if (ok) c.success else c.foregroundMuted))
-        Text(
-            if (ok) "GPS ${accuracyMeters.roundToInt()}m" else "GPS mati",
-            style = MaterialTheme.typography.labelMedium,
-            color = c.foreground,
-        )
+/** Light press feedback for bar icons: sinks while held, then a small springy pop on tap. */
+private class TapBounce(
+    val interaction: MutableInteractionSource,
+    private val pop: Animatable<Float, *>,
+    private val pressedScale: State<Float>,
+    private val scope: CoroutineScope,
+) {
+    val modifier: Modifier = Modifier.graphicsLayer {
+        val s = pressedScale.value * pop.value
+        scaleX = s
+        scaleY = s
+        // A hint of lift at the top of the pop.
+        translationY = -(pop.value - 1f) * 12.dp.toPx()
     }
+
+    fun bounce() {
+        scope.launch {
+            pop.animateTo(1.18f, tween(110, easing = FastOutSlowInEasing))
+            pop.animateTo(1f, spring(dampingRatio = 0.4f, stiffness = Spring.StiffnessMediumLow))
+        }
+    }
+}
+
+@Composable
+private fun rememberTapBounce(): TapBounce {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressedScale = animateFloatAsState(if (pressed) 0.86f else 1f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMedium), label = "press")
+    val pop = remember { Animatable(1f) }
+    val scope = rememberCoroutineScope()
+    return remember { TapBounce(interaction, pop, pressedScale, scope) }
 }
 
 /** Explains why a permission is needed before the system dialog appears. */
@@ -220,7 +247,7 @@ fun EmptyState(
         Text(message, style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary, textAlign = TextAlign.Center)
         if (actionLabel != null && onAction != null) {
             Spacer(Modifier.height(18.dp))
-            FaunaryButton(actionLabel, onAction, icon = Icons.Rounded.PhotoCamera)
+            FaunaryButton(actionLabel, onAction, icon = FaunaryIcons.Camera)
         }
     }
 }
@@ -281,4 +308,4 @@ fun MapZoomControl(onZoomIn: () -> Unit, onZoomOut: () -> Unit, modifier: Modifi
 
 @Composable
 fun LocateButton(onClick: () -> Unit, modifier: Modifier = Modifier) =
-    MapRoundIconButton(Icons.Rounded.MyLocation, "Lokasi saya", onClick, modifier, tint = FaunaryTheme.colors.primary)
+    MapRoundIconButton(FaunaryIcons.Crosshair, "Lokasi saya", onClick, modifier, tint = FaunaryTheme.colors.primary)

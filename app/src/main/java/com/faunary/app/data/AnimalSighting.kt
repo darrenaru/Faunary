@@ -16,7 +16,7 @@ data class Detection(
     val top: Float,
     val right: Float,
     val bottom: Float,
-    /** Raw ML Kit label, kept so manual corrections can be measured. */
+    /** What the detector itself said (Gemini: scientific name; ML Kit: its English label). */
     val rawLabel: String = label,
 ) {
     val animalCategory: AnimalCategory get() = AnimalCategory.fromName(category)

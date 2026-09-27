@@ -35,6 +35,7 @@ import kotlin.math.min
  * - OWN: photo pin with a Canyon outline and a category-icon badge
  * - COMMUNITY: slightly smaller photo pin with a blue outline (other people's finds)
  * - LIVE: initial letter in an olive ring with the user's name underneath (pulsed by FaunaMap)
+ * - PIN: teardrop in the marker's icon colour with its glyph, for shared markers (route destinations)
  * Bitmaps are cached, so re-syncing annotations stays cheap.
  */
 class MarkerFactory(private val context: Context, private val density: Float) {
@@ -48,10 +49,11 @@ class MarkerFactory(private val context: Context, private val density: Float) {
 
     /** [count] > 1 draws a stack: cards fanned behind the top photo and the count in the badge. */
     suspend fun marker(marker: MapMarker, selected: Boolean, dark: Boolean, count: Int = 1): Bitmap {
-        val cacheKey = "${marker.kind}|${marker.photo}|${marker.category}|${marker.label}|$selected|$dark|$count"
+        val cacheKey = "${marker.kind}|${marker.photo}|${marker.category}|${marker.label}|${marker.pinIcon}|$selected|$dark|$count"
         cache.get(cacheKey)?.let { return it }
         val bmp = when (marker.kind) {
             MarkerKind.LIVE -> liveMarker(marker.label ?: "?", selected, dark)
+            MarkerKind.PIN -> pinMarker(marker.pinIcon ?: PinIcon.FLAG, selected, dark)
             else -> photoMarker(marker, selected, dark, count)
         }
         cache.put(cacheKey, bmp)
@@ -205,6 +207,44 @@ class MarkerFactory(private val context: Context, private val density: Float) {
             }
         }
         draw(vector.root)
+    }
+
+    /**
+     * Classic map-pin teardrop in [icon]'s colour with its glyph, tip at the bitmap's bottom centre
+     * (the annotation is anchored there). The shape keeps it apart from the square photo pins.
+     */
+    private fun pinMarker(icon: PinIcon, selected: Boolean, dark: Boolean): Bitmap {
+        val d = density
+        val r = (if (selected) 17f else 13f) * d // head radius
+        val tail = r * 1.25f // head centre to tip
+        val pad = 4f * d // shadow room
+        val width = (r * 2 + pad * 2).toInt()
+        val height = (pad + r + tail + pad / 2).toInt()
+        val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val cx = width / 2f
+        val cy = pad + r
+        val tipY = cy + tail
+
+        // Teardrop: a circle whose two tangents meet at the tip.
+        val body = Path().apply {
+            val angle = Math.toDegrees(kotlin.math.acos((r / tail).toDouble())).toFloat()
+            moveTo(cx, tipY)
+            arcTo(RectF(cx - r, cy - r, cx + r, cy + r), 90f + angle, 360f - 2 * angle)
+            close()
+        }
+        canvas.drawPath(body, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = icon.argb
+            setShadowLayer(3f * d, 0f, 1.5f * d, 0x554A3023)
+        })
+        canvas.drawPath(body, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (if (selected) 2.5f else 2f) * d
+            color = if (dark) 0xFF29231F.toInt() else 0xFFFBF8F1.toInt()
+        })
+
+        drawIcon(canvas, icon.glyph(), cx, cy, r * 1.15f, 0xFFFBF8F1.toInt())
+        return bmp
     }
 
     /**

@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -255,16 +254,5 @@ fun InfoRow(icon: ImageVector, text: String, modifier: Modifier = Modifier, colo
         Icon(icon, null, Modifier.size(15.dp), tint = color)
         Spacer(Modifier.width(4.dp))
         Text(text, style = MaterialTheme.typography.bodySmall, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-@Composable
-fun RowScope.StatBlock(value: String, label: String, sub: String? = null, modifier: Modifier = Modifier) {
-    val c = FaunaryTheme.colors
-    Column(modifier.weight(1f)) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
-        Spacer(Modifier.height(2.dp))
-        Text(value, style = MaterialTheme.typography.headlineMedium, color = c.foreground)
-        if (sub != null) Text(sub, style = MaterialTheme.typography.labelMedium, color = c.success)
     }
 }

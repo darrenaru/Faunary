@@ -1,6 +1,12 @@
 package com.faunary.app.ui.review
 
 import com.faunary.app.ui.components.icon
+import com.faunary.app.location.GpsAccuracy
+import com.faunary.app.ui.components.FaunaryIcons
+import com.faunary.app.ml.DetectionSource
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.RepeatMode
@@ -37,8 +43,6 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.EditLocationAlt
-import androidx.compose.material.icons.rounded.GpsFixed
 import androidx.compose.material.icons.rounded.LocationOff
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Pets
@@ -55,9 +59,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.faunary.app.domain.AnimalCategory
 import com.faunary.app.domain.SpeciesCatalog
@@ -81,13 +87,16 @@ import kotlin.math.roundToInt
 @Composable
 fun ReviewScreen(
     onBack: () -> Unit,
-    onPickLocation: (start: String?) -> Unit,
     onSaved: (Long) -> Unit,
     viewModel: ReviewViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val c = FaunaryTheme.colors
     val locationPermission = rememberPermissionState(LocationPermissions) { if (it) viewModel.retryLocation() }
+    LifecycleResumeEffect(Unit) {
+        viewModel.recheckLocationPermission()
+        onPauseOrDispose { }
+    }
 
     LaunchedEffect(state.savedId) { state.savedId?.let(onSaved) }
     BackHandler(onBack = onBack)
@@ -151,7 +160,11 @@ fun ReviewScreen(
                                         style = MaterialTheme.typography.titleSmall, color = c.foreground,
                                     )
                                     Text(
-                                        if (state.detections.size > 1) "Pilih satwa utama untuk entri ini" else "Deteksi on-device dengan ML Kit",
+                                        when {
+                                            state.detections.size > 1 -> "Pilih satwa utama untuk entri ini"
+                                            state.detectionSource == DetectionSource.ONLINE -> "Dikenali online dengan Gemini AI"
+                                            else -> "Dikenali offline di perangkat"
+                                        },
                                         style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary,
                                     )
                                 }
@@ -172,8 +185,13 @@ fun ReviewScreen(
                                 IconBadge(Icons.Rounded.SearchOff, background = c.badgeSoft)
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text("Satwa tidak terdeteksi", style = MaterialTheme.typography.titleSmall, color = c.foreground)
-                                    Text("Tidak apa-apa — beri label sendiri di bawah dan tetap simpan fotonya.", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
+                                    if (state.depictionOnly) {
+                                        Text("Sepertinya ini gambar, bukan satwa asli", style = MaterialTheme.typography.titleSmall, color = c.foreground)
+                                        Text("Foto dari layar, poster, atau mainan tidak dikenali. Potret satwanya langsung saat kamu melihatnya.", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
+                                    } else {
+                                        Text("Satwa tidak terdeteksi", style = MaterialTheme.typography.titleSmall, color = c.foreground)
+                                        Text("Tidak apa-apa — beri label sendiri di bawah dan tetap simpan fotonya.", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
+                                    }
                                 }
                             }
                         }
@@ -211,10 +229,6 @@ fun ReviewScreen(
             Spacer(Modifier.height(10.dp))
             LocationCard(
                 status = state.location,
-                onPick = {
-                    val start = (state.location as? LocationStatus.Found)?.point?.let { "${it.latitude},${it.longitude}" }
-                    onPickLocation(start)
-                },
                 onRetry = viewModel::retryLocation,
                 onGrant = { locationPermission.request() },
                 permanentlyDenied = locationPermission.permanentlyDenied,
@@ -250,7 +264,7 @@ fun ReviewScreen(
                     state.saving -> "Menyimpan…"
                     state.detecting -> "Mendeteksi satwa…"
                     state.label.isBlank() -> "Isi jenis satwa dulu"
-                    state.location !is LocationStatus.Found -> "Tentukan lokasi dulu"
+                    (state.location as? LocationStatus.Found)?.preciseEnough != true -> "Menunggu GPS akurat…"
                     else -> "Simpan ke Koleksi"
                 },
                 onClick = viewModel::save,
@@ -279,15 +293,16 @@ private fun DetectingBadge(modifier: Modifier = Modifier) {
     }
 }
 
+/** Where the find is pinned: always the GPS fix from when it was photographed (no manual placing). */
 @Composable
 private fun LocationCard(
     status: LocationStatus,
-    onPick: () -> Unit,
     onRetry: () -> Unit,
     onGrant: () -> Unit,
     permanentlyDenied: Boolean,
 ) {
     val c = FaunaryTheme.colors
+    val context = LocalContext.current
     FaunaryCard {
         when (status) {
             LocationStatus.Loading -> Row(verticalAlignment = Alignment.CenterVertically) {
@@ -296,8 +311,9 @@ private fun LocationCard(
                 Text("Mengambil lokasi GPS…", style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary)
             }
             is LocationStatus.Found -> {
+                val accuracy = status.point.accuracy
                 Row(verticalAlignment = Alignment.Top) {
-                    IconBadge(if (status.manual) Icons.Rounded.EditLocationAlt else Icons.Rounded.GpsFixed, background = c.badgeNature)
+                    IconBadge(FaunaryIcons.Gps, background = c.badgeNature)
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
@@ -309,50 +325,99 @@ private fun LocationCard(
                             style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary,
                         )
                         Spacer(Modifier.height(6.dp))
-                        Pill(
-                            when {
-                                status.manual -> "Ditandai manual"
-                                status.fromExif -> "Dari metadata foto"
-                                else -> "GPS" + (status.point.accuracy?.let { " ±${it.roundToInt()}m" } ?: "")
-                            },
-                            color = c.badgeSoft, contentColor = c.foregroundSecondary,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Pill(
+                                "GPS" + (accuracy?.let { " ±${it.roundToInt()}m" } ?: ""),
+                                color = when {
+                                    !status.preciseEnough -> c.warning.copy(alpha = 0.18f)
+                                    (accuracy ?: 0f) <= GpsAccuracy.GOOD_METERS -> c.badgeNature
+                                    else -> c.badgeSoft
+                                },
+                                contentColor = if (status.preciseEnough) c.foregroundSecondary else c.warning,
+                            )
+                            if (status.refining) {
+                                Spacer(Modifier.width(8.dp))
+                                CircularProgressIndicator(Modifier.size(14.dp), color = c.primary, strokeWidth = 2.dp)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Mempertajam titik…", style = MaterialTheme.typography.labelMedium, color = c.foregroundSecondary)
+                            }
+                        }
                     }
                 }
-                val weak = !status.manual && (status.point.accuracy ?: 0f) > 50f
-                if (weak) {
+                if (!status.preciseEnough && !status.refining) {
                     Spacer(Modifier.height(10.dp))
-                    Text("Akurasi GPS rendah. Pertimbangkan untuk menandai lokasi di peta.", style = MaterialTheme.typography.bodySmall, color = c.warning)
+                    Text(
+                        "Akurasi GPS belum cukup untuk menandai temuan dengan tepat (maks. ±${GpsAccuracy.MAX_SAVE_METERS.roundToInt()} m). " +
+                            "Pindah ke tempat terbuka, tunggu sebentar, lalu perbarui.",
+                        style = MaterialTheme.typography.bodySmall, color = c.warning,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    FaunaryButton(
+                        "Perbarui GPS", onRetry, Modifier.fillMaxWidth(),
+                        kind = ButtonKind.Ghost, icon = Icons.Rounded.Refresh, height = 44.dp,
+                    )
                 }
-                Spacer(Modifier.height(12.dp))
-                FaunaryButton("Ubah di Peta", onPick, Modifier.fillMaxWidth(), kind = ButtonKind.Ghost, icon = Icons.Rounded.EditLocationAlt, height = 44.dp)
             }
-            LocationStatus.NoPermission, LocationStatus.Unavailable -> {
+            LocationStatus.Approximate -> {
                 Row(verticalAlignment = Alignment.Top) {
                     IconBadge(Icons.Rounded.LocationOff, background = c.badgeSoft)
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
+                        Text("Lokasi akurat belum diizinkan", style = MaterialTheme.typography.titleSmall, color = c.foreground)
                         Text(
-                            if (status == LocationStatus.NoPermission) "Izin lokasi belum diberikan" else "GPS tidak tersedia",
-                            style = MaterialTheme.typography.titleSmall, color = c.foreground,
-                        )
-                        Text(
-                            if (status == LocationStatus.NoPermission) "Izinkan lokasi untuk mencatat titik otomatis, atau tandai sendiri di peta."
-                            else "Sinyal lemah atau GPS mati. Coba lagi atau tandai lokasinya di peta.",
+                            "Kamu hanya mengizinkan lokasi perkiraan. Izinkan lokasi akurat supaya temuan tercatat tepat di titik kamu memotretnya.",
                             style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary,
                         )
                     }
                 }
                 Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (status == LocationStatus.NoPermission && !permanentlyDenied) {
-                        FaunaryButton("Izinkan", onGrant, Modifier.weight(1f), kind = ButtonKind.Secondary, height = 44.dp)
-                    } else if (status == LocationStatus.Unavailable) {
-                        FaunaryButton("Coba Lagi", onRetry, Modifier.weight(1f), kind = ButtonKind.Secondary, icon = Icons.Rounded.Refresh, height = 44.dp)
+                if (permanentlyDenied) {
+                    FaunaryButton(
+                        "Buka Pengaturan",
+                        {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
+                            )
+                        },
+                        Modifier.fillMaxWidth(), height = 44.dp,
+                    )
+                } else {
+                    FaunaryButton("Izinkan Lokasi Akurat", onGrant, Modifier.fillMaxWidth(), height = 44.dp)
+                }
+            }
+            LocationStatus.NoPermission, LocationStatus.Unavailable -> {
+                val noPermission = status == LocationStatus.NoPermission
+                Row(verticalAlignment = Alignment.Top) {
+                    IconBadge(Icons.Rounded.LocationOff, background = c.badgeSoft)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (noPermission) "Izin lokasi belum diberikan" else "GPS tidak tersedia",
+                            style = MaterialTheme.typography.titleSmall, color = c.foreground,
+                        )
+                        Text(
+                            if (noPermission) "Temuan ditandai di peta tepat di titik kamu memotretnya, jadi lokasi dibutuhkan untuk menyimpan."
+                            else "Sinyal lemah atau GPS mati. Nyalakan GPS lalu coba lagi.",
+                            style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary,
+                        )
                     }
-                    FaunaryButton("Tandai di Peta", onPick, Modifier.weight(1f), icon = Icons.Rounded.EditLocationAlt, height = 44.dp)
+                }
+                Spacer(Modifier.height(12.dp))
+                when {
+                    !noPermission -> FaunaryButton("Coba Lagi", onRetry, Modifier.fillMaxWidth(), icon = Icons.Rounded.Refresh, height = 44.dp)
+                    permanentlyDenied -> FaunaryButton(
+                        "Buka Pengaturan",
+                        {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
+                            )
+                        },
+                        Modifier.fillMaxWidth(), height = 44.dp,
+                    )
+                    else -> FaunaryButton("Izinkan Lokasi", onGrant, Modifier.fillMaxWidth(), height = 44.dp)
                 }
             }
         }
     }
 }
+

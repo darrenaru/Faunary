@@ -13,8 +13,6 @@ enum class ThemeMode(val displayName: String) { SYSTEM("Ikuti sistem"), LIGHT("T
 
 data class Settings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    /** Detections below this confidence are discarded (0..1). */
-    val minConfidence: Float = 0.5f,
     val explorerName: String = "Penjelajah",
     /** Terrain + extruded buildings + tilted camera. Off by default: it costs more battery/data. */
     val map3D: Boolean = false,
@@ -34,7 +32,6 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
     private fun read() = Settings(
         themeMode = runCatching { ThemeMode.valueOf(prefs.getString(KEY_THEME, null) ?: "") }
             .getOrDefault(ThemeMode.SYSTEM),
-        minConfidence = prefs.getFloat(KEY_MIN_CONFIDENCE, 0.5f),
         explorerName = prefs.getString(KEY_NAME, null) ?: "Penjelajah",
         map3D = prefs.getBoolean(KEY_MAP_3D, false),
         shareLiveLocation = prefs.getBoolean(KEY_SHARE_LIVE, false),
@@ -43,11 +40,6 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
 
     fun setThemeMode(mode: ThemeMode) {
         prefs.edit { putString(KEY_THEME, mode.name) }
-        _settings.value = read()
-    }
-
-    fun setMinConfidence(value: Float) {
-        prefs.edit { putFloat(KEY_MIN_CONFIDENCE, value) }
         _settings.value = read()
     }
 
@@ -73,7 +65,6 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
 
     private companion object {
         const val KEY_THEME = "theme_mode"
-        const val KEY_MIN_CONFIDENCE = "min_confidence"
         const val KEY_NAME = "explorer_name"
         const val KEY_MAP_3D = "map_3d"
         const val KEY_SHARE_LIVE = "share_live_location"

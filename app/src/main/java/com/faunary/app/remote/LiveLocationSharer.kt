@@ -21,7 +21,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.launchIn
@@ -53,8 +56,13 @@ class LiveLocationSharer @Inject constructor(
         combine(foreground, settings.settings.map { it.shareLiveLocation }) { fg, share -> fg && share }
             .distinctUntilChanged()
             .flatMapLatest { active ->
-                if (active && location.hasPermission()) locationUpdates()
-                else {
+                if (active) {
+                    // Sharing is often switched on before location is allowed: start as soon as it is.
+                    flow {
+                        while (!location.hasPermission()) delay(PERMISSION_POLL_MS)
+                        emitAll(locationUpdates())
+                    }
+                } else {
                     stopSharing()
                     emptyFlow()
                 }
@@ -118,3 +126,4 @@ class LiveLocationSharer @Inject constructor(
 private const val FIX_INTERVAL_MS = 5_000L
 private const val MOVE_THRESHOLD_M = 10.0
 private const val HEARTBEAT_MS = 30_000L
+private const val PERMISSION_POLL_MS = 2_000L

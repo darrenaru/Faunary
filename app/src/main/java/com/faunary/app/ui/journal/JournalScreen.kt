@@ -1,6 +1,7 @@
 package com.faunary.app.ui.journal
 
 import androidx.compose.foundation.background
+import com.faunary.app.ui.components.FaunaryIcons
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,7 +24,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.History
@@ -113,7 +113,7 @@ fun JournalScreen(
         if (state.loaded && st.total == 0) {
             item {
                 EmptyState(
-                    Icons.Rounded.AutoStories, "Jurnalmu masih kosong",
+                    FaunaryIcons.Journal, "Jurnalmu masih kosong",
                     "Statistik, rekor, dan riwayat pertemuan akan tumbuh seiring kamu mendokumentasikan satwa.",
                     actionLabel = "Mulai Mendokumentasikan", onAction = onOpenCamera,
                     modifier = Modifier.padding(top = 24.dp),

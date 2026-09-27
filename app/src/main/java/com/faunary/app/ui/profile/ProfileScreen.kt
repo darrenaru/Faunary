@@ -21,7 +21,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FileDownload
@@ -33,16 +32,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -88,7 +83,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
 import javax.inject.Inject
-import kotlin.math.roundToInt
 
 data class ProfileUiState(
     val settings: Settings = Settings(),
@@ -120,7 +114,6 @@ class ProfileViewModel @Inject constructor(
 
     fun setTheme(mode: ThemeMode) = settingsRepo.setThemeMode(mode)
     fun setMap3D(enabled: Boolean) = settingsRepo.setMap3D(enabled)
-    fun setMinConfidence(v: Float) = settingsRepo.setMinConfidence(v)
     fun setName(name: String) {
         settingsRepo.setExplorerName(name)
         viewModelScope.launch { supabase.syncProfile() }
@@ -163,7 +156,6 @@ fun ProfileScreen(
     val c = FaunaryTheme.colors
     val context = LocalContext.current
     var editName by rememberSaveable { mutableStateOf(false) }
-    var confidence by remember(state.settings.minConfidence) { mutableFloatStateOf(state.settings.minConfidence) }
 
     Column(
         Modifier
@@ -222,7 +214,7 @@ fun ProfileScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Peta 3D", style = MaterialTheme.typography.titleSmall, color = c.foreground)
-                    Text("Relief bukit, gedung 3D, dan kamera miring. Lebih boros baterai.", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
+                    Text("Relief bukit, gedung, landmark, dan pohon 3D dengan kamera miring. Lebih boros baterai dan data.", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
                 }
                 Spacer(Modifier.width(12.dp))
                 Switch(
@@ -243,7 +235,7 @@ fun ProfileScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Bagikan lokasi live", style = MaterialTheme.typography.titleSmall, color = c.foreground)
-                        Text("Penjelajah lain melihat posisimu selama aplikasi terbuka.", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
+                        Text("Penjelajah lain melihat posisimu dan rute yang sedang kamu tuju selama aplikasi terbuka.", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
                     }
                     Spacer(Modifier.width(12.dp))
                     Switch(
@@ -255,24 +247,6 @@ fun ProfileScreen(
                         ),
                     )
                 }
-            }
-        }
-
-        FaunaryCard {
-            SettingTitle(Icons.Rounded.AutoAwesome, "Ambang keyakinan AI", "Deteksi di bawah nilai ini diabaikan")
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Slider(
-                    value = confidence,
-                    onValueChange = { confidence = it },
-                    onValueChangeFinished = { viewModel.setMinConfidence(confidence) },
-                    valueRange = 0.3f..0.9f,
-                    steps = 5,
-                    colors = SliderDefaults.colors(thumbColor = c.primary, activeTrackColor = c.primary, inactiveTrackColor = c.surfaceMuted),
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(12.dp))
-                Text("${(confidence * 100).roundToInt()}%", style = MaterialTheme.typography.titleMedium, color = c.foreground)
             }
         }
 
@@ -326,7 +300,7 @@ fun ProfileScreen(
             Spacer(Modifier.height(8.dp))
             Text(
                 if (viewModel.online) {
-                    "Temuan (foto, jenis, catatan, dan lokasi) dibagikan publik ke peta komunitas. Favorit tetap pribadi di perangkat ini. Deteksi AI berjalan offline di HP-mu."
+                    "Temuan (foto, jenis, catatan, dan lokasi) dibagikan publik ke peta komunitas. Favorit tetap pribadi di perangkat ini. Untuk mengenali jenis hewan, foto dikirim ke layanan AI (Google Gemini); tanpa internet, deteksi berjalan di HP-mu."
                 } else {
                     "Semua foto, lokasi, dan catatan disimpan hanya di perangkat ini. Deteksi AI berjalan offline."
                 },

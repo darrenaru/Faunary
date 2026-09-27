@@ -182,7 +182,10 @@ class UpdateRepository @Inject constructor(@ApplicationContext private val conte
     private fun tryPatch(patch: ReleasePatch, target: ReleaseFile): Boolean = runCatching {
         val patchFile = File(dir, "update.patch")
         download(patch.path, patchFile, patch.size)
-        check(sha256(patchFile).equals(patch.sha256, ignoreCase = true)) { "patch checksum mismatch" }
+        if (!sha256(patchFile).equals(patch.sha256, ignoreCase = true)) {
+            patchFile.delete() // corrupted: fetch it again next time instead of reusing it forever
+            error("patch checksum mismatch")
+        }
         val out = File(dir, "update.apk.tmp")
         out.outputStream().buffered().use { stream ->
             Patch.patch(File(installedApkPath()).readBytes(), patchFile.readBytes(), stream)

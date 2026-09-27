@@ -1,8 +1,38 @@
 package com.faunary.app.ui.map
 
+import com.faunary.app.remote.LiveRouteDto
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.ErrorOutline
+import android.content.ClipData
+import android.content.ClipboardManager
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Signpost
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import android.widget.Toast
+import com.faunary.app.remote.MapPin
+import androidx.compose.material.icons.rounded.DeleteOutline
+import com.faunary.app.ui.components.FaunaryTextField
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.graphics.Color
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
+import kotlinx.coroutines.launch
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -28,14 +58,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Directions
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Pets
-import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.animation.animateColorAsState
@@ -55,8 +83,6 @@ import com.faunary.app.location.deviceOrientation
 import com.faunary.app.location.hasOrientationSensor
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Explore
-import androidx.compose.material.icons.rounded.Notifications
-import androidx.compose.material.icons.rounded.NotificationsNone
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.withFrameMillis
 import androidx.lifecycle.Lifecycle
@@ -76,7 +102,6 @@ import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.ForkLeft
 import androidx.compose.material.icons.rounded.ForkRight
 import androidx.compose.material.icons.rounded.Merge
-import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material.icons.rounded.RoundaboutLeft
 import androidx.compose.material.icons.rounded.RoundaboutRight
@@ -97,17 +122,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.offset
-import androidx.compose.material.icons.rounded.Layers
-import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import com.faunary.app.location.GeoPoint
 import com.faunary.app.remote.CommunitySighting
 import com.faunary.app.util.Geo
@@ -189,6 +205,10 @@ fun MapScreen(
 
     var locationDismissed by rememberSaveable { mutableStateOf(false) }
     var clusterList by remember { mutableStateOf<ClusterList?>(null) }
+    /** The viewer's marker whose details form is open (a freshly deployed one, or one being edited). */
+    var editingPin by remember { mutableStateOf<MapPin?>(null) }
+    val deploy by viewModel.deploy.collectAsStateWithLifecycle()
+    val justDeployed by viewModel.justDeployed.collectAsStateWithLifecycle()
     val locationPermission = rememberPermissionState(LocationPermissions) { granted ->
         if (granted) {
             if (routeUi != null) viewModel.refreshRoute()
@@ -305,6 +325,12 @@ fun MapScreen(
             selectedKey = state.selection?.key,
             onMarkerClick = { key ->
                 clusterList = null
+                val draft = viewModel.ownPin(key)?.takeIf { it.isDraft }
+                if (draft != null) {
+                    viewModel.select(null)
+                    editingPin = draft
+                    return@FaunaMap
+                }
                 viewModel.select(key)
                 state.markers.firstOrNull { it.key == key }?.let {
                     controller.flyTo(it.latitude, it.longitude, bottomPaddingPx = cardPaddingPx)
@@ -313,8 +339,17 @@ fun MapScreen(
             onCameraIdle = viewModel::onCameraIdle,
             route = if (navigating) routeUi?.remaining ?: routeUi?.route?.points else routeUi?.route?.points,
             fitRoute = !navigating,
+            routeDrawnAt = routeUi?.drawnAt ?: 0L,
+            sharedRoutes = state.sharedRoutes.map { SharedRouteLine(it.userId, it.points, it.destLat, it.destLng, it.startedAt) },
             heading = orientation,
             onUserPan = { if (navigating) following = false },
+            // Long press drops a shared marker there (not while navigating, where the map follows the user).
+            onMapLongClick = if (viewModel.canCreatePins && !navigating) { lat, lng ->
+                viewModel.select(null)
+                clusterList = null
+                viewModel.deployPin(lat, lng)
+            } else null,
+            deploy = deploy,
             routeTopPadding = 190.dp,
             routeBottomPadding = BottomBarSpace + 250.dp,
             onMapClick = {
@@ -383,6 +418,17 @@ fun MapScreen(
             }
         }
 
+        // Marker deployment status, just under the header and filters; then a few seconds of "Undo".
+        AnimatedVisibility(
+            visible = deploy != null || justDeployed != null,
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 136.dp),
+            enter = fadeIn(tween(200)) + slideInVertically(tween(250)) { -it / 2 },
+            exit = fadeOut(tween(250)),
+        ) {
+            val phase = deploy?.phase ?: PinDeploy.Phase.DEPLOYED
+            DeployStatusChip(phase, onUndo = if (deploy == null && justDeployed != null) viewModel::undoDeploy else null)
+        }
+
         // Map controls
         if (!navigating) Column(
             Modifier.align(Alignment.CenterEnd).padding(end = 16.dp),
@@ -394,6 +440,7 @@ fun MapScreen(
                     layers = state.layers,
                     communityCount = state.community.size,
                     liveCount = state.liveUsers.size,
+                    pinCount = state.pins.size,
                     shareLive = state.settings.shareLiveLocation,
                     onLayers = viewModel::setLayers,
                     onShareLive = { enabled ->
@@ -481,8 +528,18 @@ fun MapScreen(
                 }
                 is MapSelection.Live -> LiveUserCard(
                     user = sel.user,
+                    trip = state.sharedRoutes.firstOrNull { it.userId == sel.user.userId },
                     here = state.lastFix,
                     onRoute = { viewModel.startRoute(sel.user.latitude, sel.user.longitude, sel.user.name) },
+                    modifier = cardModifier,
+                )
+                is MapSelection.Pin -> PinCard(
+                    pin = sel.pin,
+                    mine = sel.mine,
+                    here = state.lastFix,
+                    onRoute = { viewModel.startRoute(sel.pin.latitude, sel.pin.longitude, sel.pin.displayTitle) },
+                    onEdit = { editingPin = sel.pin },
+                    onDelete = { viewModel.deletePin(sel.pin.id) },
                     modifier = cardModifier,
                 )
                 null -> Unit
@@ -533,7 +590,7 @@ fun MapScreen(
                         OrientationToggle(on = useDeviceHeading, onClick = { useDeviceHeading = !useDeviceHeading })
                     }
                     if (!following) {
-                        MapRoundIconButton(Icons.Rounded.MyLocation, "Ikuti posisiku", { following = true })
+                        MapRoundIconButton(FaunaryIcons.Crosshair, "Ikuti posisiku", { following = true })
                     }
                 }
                 NavigationPanel(
@@ -574,6 +631,32 @@ fun MapScreen(
 
     if (state.online && !state.settings.publicNoticeSeen) {
         PublicNoticeDialog(onAcknowledge = viewModel::acknowledgePublicNotice)
+    }
+
+    editingPin?.let { pin ->
+        PinFormDialog(
+            pin = pin,
+            onSave = { title, note, icon, onDone ->
+                viewModel.savePinDetails(pin.id, title, note, icon) { ok ->
+                    onDone()
+                    if (ok) editingPin = null
+                }
+            },
+            onDelete = {
+                viewModel.deletePin(pin.id)
+                editingPin = null
+            },
+            onDismiss = { editingPin = null },
+        )
+    }
+
+    val message by viewModel.message.collectAsStateWithLifecycle()
+    val toastContext = LocalContext.current
+    LaunchedEffect(message) {
+        message?.let {
+            Toast.makeText(toastContext, it, Toast.LENGTH_SHORT).show()
+            viewModel.messageShown()
+        }
     }
 }
 
@@ -674,7 +757,7 @@ private fun CommunityPreviewCard(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(sighting.animalLabel, style = MaterialTheme.typography.titleLarge, color = c.foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                InfoRow(Icons.Rounded.Person, "Ditemukan oleh ${sighting.displayName}", color = c.info)
+                InfoRow(FaunaryIcons.User, "Ditemukan oleh ${sighting.displayName}", color = c.info)
                 Spacer(Modifier.height(4.dp))
                 InfoRow(Icons.Rounded.LocationOn, sighting.locationName ?: Format.coordinates(sighting.latitude, sighting.longitude))
                 Spacer(Modifier.height(2.dp))
@@ -690,7 +773,7 @@ private fun CommunityPreviewCard(
 }
 
 @Composable
-private fun LiveUserCard(user: LiveUser, here: GeoPoint?, onRoute: () -> Unit, modifier: Modifier = Modifier) {
+private fun LiveUserCard(user: LiveUser, trip: LiveRouteDto?, here: GeoPoint?, onRoute: () -> Unit, modifier: Modifier = Modifier) {
     val c = FaunaryTheme.colors
     FaunaryCard(modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -716,10 +799,361 @@ private fun LiveUserCard(user: LiveUser, here: GeoPoint?, onRoute: () -> Unit, m
                 }
             }
         }
+        // Where they're heading, when they share an active route (drawn in olive on the map).
+        trip?.let { t ->
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(c.secondary.copy(alpha = 0.14f)).padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    if (t.mode == TravelMode.DRIVING.profile) Icons.Rounded.DirectionsCar else Icons.AutoMirrored.Rounded.DirectionsWalk,
+                    null, Modifier.size(20.dp), tint = c.brand,
+                )
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Sedang menuju", style = MaterialTheme.typography.labelMedium, color = c.foregroundSecondary)
+                    Text(t.destLabel, style = MaterialTheme.typography.titleSmall, color = c.foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                t.remainingMeters?.let {
+                    Text("${Format.distance(it.toDouble())} lagi", style = MaterialTheme.typography.labelLarge, color = c.brand)
+                }
+            }
+        }
         Spacer(Modifier.height(14.dp))
         FaunaryButton("Rute ke Sini", onRoute, Modifier.fillMaxWidth(), kind = ButtonKind.Secondary, icon = Icons.Rounded.Directions, height = 46.dp)
     }
 }
+
+/** A shared marker: who placed it, how far it is, a route there, and delete for its creator. */
+@Composable
+private fun PinCard(
+    pin: MapPin,
+    mine: Boolean,
+    here: GeoPoint?,
+    onRoute: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = FaunaryTheme.colors
+    val icon = PinIcon.fromKey(pin.icon)
+    var confirmDelete by remember { mutableStateOf(false) }
+    FaunaryCard(modifier.fillMaxWidth(), shape = RoundedCornerShape(26.dp)) {
+        Row(verticalAlignment = Alignment.Top) {
+            Box(
+                Modifier.size(52.dp).clip(CircleShape).background(icon.color.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon.glyph(), icon.label, Modifier.size(26.dp), tint = icon.color)
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(pin.displayTitle, style = MaterialTheme.typography.titleLarge, color = c.foreground, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    when {
+                        mine -> "Penandamu"
+                        pin.isDraft -> "Baru di-deploy oleh ${pin.displayName} · belum diberi nama"
+                        else -> "Ditandai oleh ${pin.displayName}"
+                    },
+                    style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary,
+                )
+                here?.let {
+                    Text(
+                        "${Format.distance(Geo.distanceMeters(it.latitude, it.longitude, pin.latitude, pin.longitude))} darimu",
+                        style = MaterialTheme.typography.labelMedium, color = c.foregroundMuted,
+                    )
+                }
+            }
+        }
+        pin.note?.takeIf { it.isNotBlank() }?.let {
+            Spacer(Modifier.height(10.dp))
+            Text(it, style = MaterialTheme.typography.bodyMedium, color = c.foreground, maxLines = 4, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.height(14.dp))
+        FaunaryButton("Rute ke Sini", onRoute, Modifier.fillMaxWidth(), icon = Icons.Rounded.Directions, height = 46.dp)
+        if (mine) {
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FaunaryButton("Ubah", onEdit, Modifier.weight(1f), kind = ButtonKind.Secondary, icon = Icons.Rounded.Edit, height = 44.dp)
+                FaunaryButton("Hapus", { confirmDelete = true }, Modifier.weight(1f), kind = ButtonKind.Ghost, icon = Icons.Rounded.DeleteOutline, height = 44.dp)
+            }
+        }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            containerColor = c.surface,
+            shape = RoundedCornerShape(28.dp),
+            title = { Text("Hapus penanda?", color = c.foreground) },
+            text = { Text("\u201C${pin.displayTitle}\u201D akan hilang dari peta semua pengguna.", color = c.foregroundSecondary) },
+            confirmButton = {
+                FaunaryButton(
+                    "Hapus",
+                    {
+                        confirmDelete = false
+                        onDelete()
+                    },
+                    kind = ButtonKind.Danger, height = 44.dp,
+                )
+            },
+            dismissButton = { FaunaryButton("Batal", { confirmDelete = false }, kind = ButtonKind.Ghost, height = 44.dp) },
+        )
+    }
+}
+
+/**
+ * Details of a deployed marker: name, note and icon. It's already on everyone's map; saving updates
+ * it there in real time. Also used to edit an existing marker.
+ */
+@Composable
+private fun PinFormDialog(
+    pin: MapPin,
+    onSave: (title: String, note: String, icon: PinIcon, onDone: () -> Unit) -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val c = FaunaryTheme.colors
+    val context = LocalContext.current
+    var title by rememberSaveable(pin.id) { mutableStateOf(pin.title.orEmpty()) }
+    var note by rememberSaveable(pin.id) { mutableStateOf(pin.note.orEmpty()) }
+    var icon by rememberSaveable(pin.id) { mutableStateOf(PinIcon.fromKey(pin.icon)) }
+    var saving by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    val coordinates = Format.coordinates(pin.latitude, pin.longitude)
+
+    Dialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = !saving),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .imePadding()
+                .clip(RoundedCornerShape(32.dp))
+                .background(c.surface),
+        ) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 22.dp),
+            ) {
+                // Header
+                Box(
+                    Modifier.size(56.dp).clip(CircleShape).background(PinHeaderGreen.copy(alpha = 0.14f)).align(Alignment.CenterHorizontally),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Flag, null, Modifier.size(28.dp), tint = PinHeaderGreen)
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    if (pin.isDraft) "Tandai lokasi ini" else "Ubah penanda",
+                    style = MaterialTheme.typography.headlineSmall, color = c.foreground,
+                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    if (pin.isDraft) "Penanda sudah ter-deploy dan terlihat oleh semua pengguna. Lengkapi infonya agar bisa dipakai sebagai tujuan rute."
+                    else "Perubahan langsung terlihat oleh semua pengguna.",
+                    style = MaterialTheme.typography.bodyMedium, color = c.foregroundSecondary,
+                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(16.dp))
+
+                // Coordinates + copy
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(c.surfaceMuted).padding(start = 14.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Rounded.LocationOn, null, Modifier.size(26.dp), tint = c.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Koordinat", style = MaterialTheme.typography.labelMedium, color = c.foregroundSecondary)
+                        Text(coordinates, style = MaterialTheme.typography.titleSmall, color = c.foreground)
+                    }
+                    Box(
+                        Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(c.surface)
+                            .border(1.dp, c.border, RoundedCornerShape(12.dp))
+                            .clickable(onClickLabel = "Salin koordinat") {
+                                context.getSystemService(ClipboardManager::class.java)
+                                    ?.setPrimaryClip(ClipData.newPlainText("Koordinat", coordinates))
+                                Toast.makeText(context, "Koordinat disalin", Toast.LENGTH_SHORT).show()
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Rounded.ContentCopy, "Salin koordinat", Modifier.size(18.dp), tint = c.foreground)
+                    }
+                }
+                Spacer(Modifier.height(18.dp))
+
+                // Name
+                PinFieldLabel(Icons.Rounded.Signpost, "Nama penanda", required = true)
+                Spacer(Modifier.height(8.dp))
+                FaunaryTextField(
+                    title, { title = it.take(PIN_TITLE_MAX) }, "Mis. Sarang elang",
+                    imeAction = ImeAction.Next,
+                    trailing = if (title.isNotEmpty()) {
+                        {
+                            Icon(
+                                Icons.Rounded.Close, "Hapus nama",
+                                Modifier.size(20.dp).clip(CircleShape).clickable { title = "" },
+                                tint = c.foregroundSecondary,
+                            )
+                        }
+                    } else null,
+                )
+                PinCounter(title.length, PIN_TITLE_MAX)
+
+                // Note
+                PinFieldLabel(Icons.Rounded.Description, "Catatan (opsional)")
+                Spacer(Modifier.height(8.dp))
+                FaunaryTextField(
+                    note, { note = it.take(PIN_NOTE_MAX) }, "Tambahkan informasi tentang lokasi ini…",
+                    singleLine = false, minLines = 3, imeAction = ImeAction.Default,
+                )
+                PinCounter(note.length, PIN_NOTE_MAX)
+
+                // Icon
+                PinFieldLabel(Icons.Rounded.LocationOn, "Ikon penanda")
+                Spacer(Modifier.height(10.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PinIcon.entries.forEach { option ->
+                        val selected = option == icon
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(option.color.copy(alpha = if (selected) 0.2f else 0.1f))
+                                .border(if (selected) 2.dp else 0.dp, if (selected) option.color else Color.Transparent, RoundedCornerShape(16.dp))
+                                .selectable(selected = selected, role = Role.RadioButton) { icon = option }
+                                .semantics { contentDescription = option.label },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(option.glyph(), null, Modifier.size(24.dp), tint = option.color)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+
+                // Actions
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    FaunaryButton("Batal", onDismiss, Modifier.weight(1f), kind = ButtonKind.Ghost, enabled = !saving, height = 52.dp)
+                    FaunaryButton(
+                        if (saving) "Menyimpan\u2026" else "Simpan",
+                        {
+                            saving = true
+                            onSave(title, note, icon) { saving = false }
+                        },
+                        Modifier.weight(1.2f),
+                        icon = Icons.Rounded.Flag,
+                        enabled = title.isNotBlank() && !saving,
+                        height = 52.dp,
+                    )
+                }
+                // Unused or dropped by mistake: markers can go at any time, named or not.
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    Modifier.align(Alignment.CenterHorizontally).clip(CircleShape)
+                        .clickable(enabled = !saving, role = Role.Button) { confirmDelete = true }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Rounded.DeleteOutline, null, Modifier.size(18.dp), tint = c.danger)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Hapus penanda", style = MaterialTheme.typography.labelLarge, color = c.danger)
+                }
+            }
+            Box(
+                Modifier.align(Alignment.TopEnd).padding(14.dp).size(40.dp).clip(CircleShape)
+                    .background(c.surfaceMuted).clickable(enabled = !saving, onClickLabel = "Tutup", onClick = onDismiss),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.Close, "Tutup", Modifier.size(20.dp), tint = c.foreground)
+            }
+        }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            containerColor = c.surface,
+            shape = RoundedCornerShape(28.dp),
+            title = { Text("Hapus penanda?", color = c.foreground) },
+            text = { Text("Penanda di titik ini akan hilang dari peta semua pengguna.", color = c.foregroundSecondary) },
+            confirmButton = {
+                FaunaryButton(
+                    "Hapus",
+                    {
+                        confirmDelete = false
+                        onDelete()
+                    },
+                    kind = ButtonKind.Danger, height = 44.dp,
+                )
+            },
+            dismissButton = { FaunaryButton("Batal", { confirmDelete = false }, kind = ButtonKind.Ghost, height = 44.dp) },
+        )
+    }
+}
+
+@Composable
+private fun PinFieldLabel(icon: ImageVector, text: String, required: Boolean = false) {
+    val c = FaunaryTheme.colors
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, Modifier.size(20.dp), tint = c.primary)
+        Spacer(Modifier.width(10.dp))
+        Text(text, style = MaterialTheme.typography.labelLarge, color = c.foreground)
+        if (required) Text(" *", style = MaterialTheme.typography.labelLarge, color = c.primary)
+    }
+}
+
+@Composable
+private fun PinCounter(length: Int, max: Int) {
+    val c = FaunaryTheme.colors
+    Text(
+        "$length/$max",
+        style = MaterialTheme.typography.labelSmall, color = c.foregroundMuted,
+        textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 12.dp),
+    )
+}
+
+/** "Deploying…" → "Deployed" / "Failed" while a marker goes live; [onUndo] adds "Undo" once it's live. */
+@Composable
+private fun DeployStatusChip(phase: PinDeploy.Phase, onUndo: (() -> Unit)? = null) {
+    val c = FaunaryTheme.colors
+    Row(
+        Modifier.softShadow(CircleShape, 6.dp).clip(CircleShape).background(c.surface).padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        when (phase) {
+            PinDeploy.Phase.DEPLOYING -> CircularProgressIndicator(Modifier.size(16.dp), color = c.primary, strokeWidth = 2.dp)
+            PinDeploy.Phase.DEPLOYED, PinDeploy.Phase.SETTLING -> Icon(Icons.Rounded.CheckCircle, null, Modifier.size(18.dp), tint = c.success)
+            PinDeploy.Phase.FAILED -> Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(18.dp), tint = c.danger)
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            when (phase) {
+                PinDeploy.Phase.DEPLOYING -> "Men-deploy penanda\u2026"
+                PinDeploy.Phase.DEPLOYED, PinDeploy.Phase.SETTLING -> "Penanda ter-deploy"
+                PinDeploy.Phase.FAILED -> "Penanda gagal di-deploy"
+            },
+            style = MaterialTheme.typography.labelLarge, color = c.foreground,
+        )
+        if (onUndo != null) {
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "Urungkan",
+                style = MaterialTheme.typography.labelLarge, color = c.primary,
+                modifier = Modifier.clip(CircleShape).clickable(role = Role.Button, onClick = onUndo)
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+            )
+        }
+    }
+}
+
+private const val PIN_TITLE_MAX = 50
+private const val PIN_NOTE_MAX = 200
+
+/** Header accent of the new-marker dialog. */
+private val PinHeaderGreen = Color(0xFF3F8A7A)
 
 @Composable
 private fun PublicNoticeDialog(onAcknowledge: () -> Unit) {
@@ -733,7 +1167,7 @@ private fun PublicNoticeDialog(onAcknowledge: () -> Unit) {
         text = {
             Text(
                 "Setiap satwa yang kamu simpan, termasuk foto, jenis hewan, catatan, dan titik lokasinya, akan terlihat oleh semua pengguna Faunary. " +
-                    "Hindari memotret di rumah atau tempat pribadi. Lokasi live-mu tidak dibagikan kecuali kamu menyalakannya sendiri.",
+                    "Hindari memotret di rumah atau tempat pribadi. Lokasi live dan rute perjalananmu tidak dibagikan kecuali kamu menyalakannya sendiri.",
                 color = c.foregroundSecondary,
             )
         },
@@ -768,6 +1202,7 @@ private fun ClusterListCard(
                     is MapSelection.Own -> listOf(sel.sighting.photoPath, sel.sighting.animalLabel, "Temuanmu", Format.relative(sel.sighting.timestamp))
                     is MapSelection.Community -> listOf(sel.sighting.photoUrl, sel.sighting.animalLabel, "oleh ${sel.sighting.displayName}", Format.relative(sel.sighting.takenAtMs))
                     is MapSelection.Live -> listOf("", sel.user.name, "", "")
+                    is MapSelection.Pin -> listOf("", sel.pin.displayTitle, "Penanda", "")
                 }
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable { onPick(sel) }.padding(vertical = 6.dp),
@@ -1012,33 +1447,72 @@ private fun MapHeader(
     }
 }
 
-/** Bell inside the header card; the badge shows unread likes/comments. */
+/**
+ * Bell inside the header card; the badge shows unread likes/comments. While there's something unread
+ * the bell rings (a short damped swing) now and then, and right away when a new notification arrives.
+ */
 @Composable
 private fun HeaderBell(unread: Int, onClick: () -> Unit) {
     val c = FaunaryTheme.colors
+    val swing = remember { Animatable(0f) }
+    val badgeScale = remember { Animatable(if (unread > 0) 1f else 0f) }
+    var shownCount by remember { mutableStateOf(unread) }
+    LaunchedEffect(unread) {
+        val grew = unread > 0 && (badgeScale.value == 0f || unread > shownCount)
+        if (unread > 0) shownCount = unread // keep the last number while the badge shrinks away
+        launch {
+            when {
+                unread == 0 -> badgeScale.animateTo(0f, tween(160))
+                grew || badgeScale.value < 1f -> {
+                    // Pop in / bump for a new notification.
+                    badgeScale.snapTo(if (badgeScale.value == 0f) 0.3f else 1f)
+                    badgeScale.animateTo(1.25f, tween(140))
+                    badgeScale.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMedium))
+                }
+            }
+        }
+        if (unread == 0) {
+            swing.animateTo(0f, tween(150))
+            return@LaunchedEffect
+        }
+        while (isActive) {
+            for (angle in BELL_RING) swing.animateTo(angle, tween(85, easing = FastOutSlowInEasing))
+            delay(BELL_RING_PAUSE_MS)
+        }
+    }
     Box {
         Box(
             Modifier.size(44.dp).clip(RoundedCornerShape(15.dp)).background(c.surfaceMuted).clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                if (unread > 0) Icons.Rounded.Notifications else Icons.Rounded.NotificationsNone,
+                FaunaryIcons.Bell,
                 if (unread > 0) "Notifikasi, $unread belum dibaca" else "Notifikasi",
-                Modifier.size(22.dp), tint = c.brand,
+                Modifier.size(24.dp).graphicsLayer {
+                    // Swings from the top, like a real bell hanging from its loop.
+                    transformOrigin = TransformOrigin(0.5f, 0.12f)
+                    rotationZ = swing.value
+                },
+                tint = c.brand,
             )
         }
-        if (unread > 0) {
+        if (badgeScale.value > 0f) {
             Box(
                 Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp)
+                    .graphicsLayer { scaleX = badgeScale.value; scaleY = badgeScale.value }
                     .border(2.dp, c.surface, CircleShape)
                     .heightIn(min = 20.dp).clip(CircleShape).background(c.primary).padding(horizontal = 6.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(if (unread > 99) "99+" else "$unread", style = MaterialTheme.typography.labelSmall, color = c.onPrimary)
+                Text(if (shownCount > 99) "99+" else "$shownCount", style = MaterialTheme.typography.labelSmall, color = c.onPrimary)
             }
         }
     }
 }
+
+/** Bell swing angles (degrees) for one ring: a damped back-and-forth. */
+private val BELL_RING = listOf(18f, -16f, 12f, -9f, 5f, -2f, 0f)
+private const val BELL_RING_PAUSE_MS = 3_000L
 
 /**
  * Compact filter chip for the map: category icon in a small disc, name and count. Semi-transparent so the
@@ -1083,4 +1557,5 @@ private val MapSelection.latLng: Pair<Double, Double>
         is MapSelection.Own -> sighting.latitude to sighting.longitude
         is MapSelection.Community -> sighting.latitude to sighting.longitude
         is MapSelection.Live -> user.latitude to user.longitude
+        is MapSelection.Pin -> pin.latitude to pin.longitude
     }

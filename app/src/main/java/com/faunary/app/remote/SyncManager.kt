@@ -65,7 +65,9 @@ class SyncManager @Inject constructor(
         val client = supabase.client ?: return
         val file = File(s.photoPath)
         if (!file.exists()) return
-        val remoteId = s.remoteId ?: UUID.randomUUID().toString()
+        // Persist the id first: if the row insert fails after the photo went up, the retry
+        // overwrites the same object instead of leaving an orphaned public photo behind.
+        val remoteId = s.remoteId ?: UUID.randomUUID().toString().also { dao.setRemoteId(s.id, it) }
         val path = photoPath(uid, remoteId)
         client.storage.from(PHOTO_BUCKET).upload(path, file.readBytes()) { upsert = true }
         client.from("sightings").upsert(s.toDto(remoteId, path))

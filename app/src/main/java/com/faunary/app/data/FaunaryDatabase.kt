@@ -53,6 +53,10 @@ interface SightingDao {
     @Query("SELECT * FROM animal_sightings WHERE syncState != 1")
     suspend fun unsynced(): List<AnimalSighting>
 
+    /** Reserves the server id before the first upload, so retries reuse it instead of orphaning photos. */
+    @Query("UPDATE animal_sightings SET remoteId = :remoteId WHERE id = :id")
+    suspend fun setRemoteId(id: Long, remoteId: String)
+
     @Query("UPDATE animal_sightings SET remoteId = :remoteId, syncState = :state WHERE id = :id")
     suspend fun markSynced(id: Long, remoteId: String, state: Int = SyncState.SYNCED)
 

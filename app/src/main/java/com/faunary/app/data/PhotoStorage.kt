@@ -4,12 +4,11 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.net.Uri
-import android.os.Build
-import android.provider.MediaStore
 import androidx.exifinterface.media.ExifInterface
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import javax.inject.Inject
@@ -17,8 +16,6 @@ import javax.inject.Singleton
 import kotlin.math.max
 
 data class StoredPhoto(val path: String, val width: Int, val height: Int)
-
-data class ExifLocation(val latitude: Double, val longitude: Double)
 
 /**
  * Keeps photos in app-private storage (scoped storage, never shared).
@@ -30,25 +27,6 @@ class PhotoStorage @Inject constructor(@ApplicationContext private val context: 
     private val dir: File get() = File(context.filesDir, "photos").apply { mkdirs() }
 
     fun newCaptureFile(): File = File(dir, "capture_${System.currentTimeMillis()}.jpg")
-
-    /** Copies a picked image into private storage. Returns the file plus GPS EXIF when present. */
-    suspend fun importFromUri(uri: Uri): Pair<File, ExifLocation?> = withContext(Dispatchers.IO) {
-        val target = File(dir, "import_${System.currentTimeMillis()}.jpg")
-        val source = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            runCatching { MediaStore.setRequireOriginal(uri) }.getOrDefault(uri)
-        } else uri
-        val input = runCatching { context.contentResolver.openInputStream(source) }.getOrNull()
-            ?: context.contentResolver.openInputStream(uri)
-            ?: error("Tidak bisa membuka foto")
-        input.use { i -> target.outputStream().use { o -> i.copyTo(o) } }
-        target to readExifLocation(target)
-    }
-
-    private fun readExifLocation(file: File): ExifLocation? = runCatching {
-        ExifInterface(file).latLong?.let { (lat, lng) ->
-            if (lat == 0.0 && lng == 0.0) null else ExifLocation(lat, lng)
-        }
-    }.getOrNull()
 
     /**
      * Rotates according to EXIF, downsizes to [maxSize] px and rewrites as a clean JPEG.
@@ -85,6 +63,11 @@ class PhotoStorage @Inject constructor(@ApplicationContext private val context: 
         val result = StoredPhoto(target.absolutePath, upright.width, upright.height)
         if (upright !== decoded) decoded.recycle()
         upright.recycle()
+        // The review screen was left meanwhile: its cleanup only knows the source, so drop the copy.
+        if (!isActive) {
+            target.delete()
+            ensureActive()
+        }
         if (source.absolutePath != target.absolutePath) source.delete()
         result
     }

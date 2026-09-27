@@ -7,15 +7,11 @@ import androidx.navigation.toRoute
 import com.faunary.app.data.AnimalSighting
 import com.faunary.app.data.SightingRepository
 import com.faunary.app.domain.AnimalCategory
-import com.faunary.app.location.LocationRepository
 import com.faunary.app.remote.SocialRepository
 import com.faunary.app.ui.navigation.DetailRoute
-import com.faunary.app.ui.navigation.PICKED_LOCATION_KEY
-import com.faunary.app.ui.navigation.decodeLatLng
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -29,9 +25,8 @@ sealed interface DetailUiState {
 
 @HiltViewModel
 class DetailViewModel @Inject constructor(
-    private val savedStateHandle: SavedStateHandle,
+    savedStateHandle: SavedStateHandle,
     private val repository: SightingRepository,
-    private val location: LocationRepository,
     socialRepository: SocialRepository,
 ) : ViewModel() {
 
@@ -49,12 +44,6 @@ class DetailViewModel @Inject constructor(
             // Bound once the entry has a server id (i.e. after its first upload).
             repository.observe(id).collect { social.bind(it?.remoteId, moderator = true) }
         }
-        viewModelScope.launch {
-            savedStateHandle.getStateFlow<String?>(PICKED_LOCATION_KEY, null).filterNotNull().collect { value ->
-                savedStateHandle[PICKED_LOCATION_KEY] = null
-                decodeLatLng(value)?.let { (lat, lng) -> updateLocation(lat, lng) }
-            }
-        }
     }
 
     fun updateLabel(label: String, category: AnimalCategory) = viewModelScope.launch {
@@ -68,20 +57,5 @@ class DetailViewModel @Inject constructor(
     fun delete(onDone: () -> Unit) = viewModelScope.launch {
         repository.delete(id)
         onDone()
-    }
-
-    private suspend fun updateLocation(lat: Double, lng: Double) {
-        val current = (state.value as? DetailUiState.Ready)?.sighting ?: return
-        val place = location.reverseGeocode(lat, lng)
-        repository.update(
-            current.copy(
-                latitude = lat,
-                longitude = lng,
-                locationManual = true,
-                locationAccuracy = null,
-                locationName = place?.shortName,
-                address = place?.fullAddress,
-            ),
-        )
     }
 }

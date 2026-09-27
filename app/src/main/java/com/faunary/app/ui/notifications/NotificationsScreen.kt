@@ -23,7 +23,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ChatBubble
-import androidx.compose.material.icons.rounded.NotificationsNone
 import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +47,7 @@ import androidx.lifecycle.viewModelScope
 import com.faunary.app.data.SightingRepository
 import com.faunary.app.notify.InteractionNotifier
 import com.faunary.app.remote.AppNotification
+import com.faunary.app.ui.components.FaunaryIcons
 import com.faunary.app.ui.components.EmptyState
 import com.faunary.app.ui.components.PhotoThumb
 import com.faunary.app.ui.components.SurfaceIconButton
@@ -105,7 +105,7 @@ fun NotificationsScreen(
         if (items.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 EmptyState(
-                    Icons.Rounded.NotificationsNone, "Belum ada notifikasi",
+                    FaunaryIcons.Bell, "Belum ada notifikasi",
                     if (viewModel.available) "Saat orang lain menyukai atau mengomentari foto satwamu, kabarnya muncul di sini."
                     else "Fitur online belum aktif di aplikasi ini.",
                 )

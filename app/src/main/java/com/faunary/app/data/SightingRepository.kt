@@ -26,9 +26,13 @@ class SightingRepository @Inject constructor(
     suspend fun add(sighting: AnimalSighting): Long =
         dao.insert(sighting.copy(syncState = SyncState.PENDING)).also { sync.schedule() }
 
-    /** Saves a user edit and marks it for re-upload. */
+    /**
+     * Saves a user edit and marks it for re-upload. An entry that was never uploaded stays PENDING
+     * (full upload incl. photo) even if its server id is already reserved; only uploaded ones become DIRTY.
+     */
     suspend fun update(sighting: AnimalSighting) {
-        dao.update(sighting.copy(syncState = if (sighting.remoteId != null) SyncState.DIRTY else SyncState.PENDING))
+        val state = if (sighting.syncState == SyncState.PENDING) SyncState.PENDING else SyncState.DIRTY
+        dao.update(sighting.copy(syncState = state))
         sync.schedule()
     }
 

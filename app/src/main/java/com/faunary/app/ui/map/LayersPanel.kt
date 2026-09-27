@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.NearMe
@@ -69,6 +70,7 @@ fun LayersButton(
     layers: MapLayers,
     communityCount: Int,
     liveCount: Int,
+    pinCount: Int,
     shareLive: Boolean,
     onLayers: (MapLayers) -> Unit,
     onShareLive: (Boolean) -> Unit,
@@ -103,7 +105,7 @@ fun LayersButton(
                     enter = fadeIn(tween(180)) + scaleIn(tween(200), initialScale = 0.92f, transformOrigin = TransformOrigin(0.92f, 0f)),
                     exit = fadeOut(tween(120)) + scaleOut(tween(120), targetScale = 0.95f, transformOrigin = TransformOrigin(0.92f, 0f)),
                 ) {
-                    LayersPanel(layers, communityCount, liveCount, shareLive, onLayers, onShareLive)
+                    LayersPanel(layers, communityCount, liveCount, pinCount, shareLive, onLayers, onShareLive)
                 }
             }
         }
@@ -115,6 +117,7 @@ private fun LayersPanel(
     layers: MapLayers,
     communityCount: Int,
     liveCount: Int,
+    pinCount: Int,
     shareLive: Boolean,
     onLayers: (MapLayers) -> Unit,
     onShareLive: (Boolean) -> Unit,
@@ -170,7 +173,7 @@ private fun LayersPanel(
                     modifier = Modifier
                         .clip(RoundedCornerShape(12.dp))
                         .background(c.primary.copy(alpha = 0.12f))
-                        .clickable(role = Role.Button) { onLayers(MapLayers(own = true, community = true, live = true)) }
+                        .clickable(role = Role.Button) { onLayers(MapLayers()) }
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                 )
             }
@@ -189,9 +192,14 @@ private fun LayersPanel(
                 ) { onLayers(layers.copy(community = it)) }
                 LayerRow(
                     dot = c.secondary, icon = FaunaryIcons.Binoculars, iconTint = c.brand, iconBg = c.secondary.copy(alpha = 0.18f),
-                    title = "Penjelajah online", count = liveCount, subtitle = "Pengguna yang sedang online",
+                    title = "Penjelajah online", count = liveCount, subtitle = "Pengguna online dan rute yang sedang mereka tuju",
                     checked = layers.live,
                 ) { onLayers(layers.copy(live = it)) }
+                LayerRow(
+                    dot = PinIcon.FLAG.color, icon = Icons.Rounded.Flag, iconTint = PinIcon.FLAG.color, iconBg = PinIcon.FLAG.color.copy(alpha = 0.15f),
+                    title = "Penanda", count = pinCount, subtitle = "Tekan lama di peta untuk menambah",
+                    checked = layers.pins,
+                ) { onLayers(layers.copy(pins = it)) }
             }
 
             Spacer(Modifier.height(14.dp))
@@ -206,7 +214,7 @@ private fun LayersPanel(
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text("Bagikan lokasi live saya", style = MaterialTheme.typography.titleSmall, color = c.foreground)
-                    Text("Hanya saat aplikasi terbuka", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
+                    Text("Posisi dan rutemu, hanya saat aplikasi terbuka", style = MaterialTheme.typography.bodySmall, color = c.foregroundSecondary)
                 }
                 FaunarySwitch(shareLive, onShareLive)
             }

@@ -5,7 +5,6 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
-import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -77,6 +76,4 @@ object Geo {
 
     /** Groups coordinates into ~100m cells, used to count distinct spots. */
     fun cellKey(lat: Double, lng: Double): String = "${(lat * 1000).roundToInt()}:${(lng * 1000).roundToInt()}"
-
-    fun isNear(a: Double, b: Double) = abs(a - b) < 1e-9
 }

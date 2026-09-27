@@ -1,6 +1,7 @@
 package com.faunary.app.ui.detail
 
 import android.content.Intent
+import com.faunary.app.ui.components.FaunaryIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -35,8 +36,6 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.EditLocationAlt
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.GpsFixed
-import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.PinDrop
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Schedule
@@ -88,7 +87,6 @@ import kotlin.math.roundToInt
 fun DetailScreen(
     onBack: () -> Unit,
     onShowOnMap: (Long) -> Unit,
-    onEditLocation: (start: String) -> Unit,
     onRoute: (Double, Double, String) -> Unit,
     viewModel: DetailViewModel = hiltViewModel(),
 ) {
@@ -101,7 +99,7 @@ fun DetailScreen(
                 EmptyState(Icons.Rounded.PinDrop, "Temuan tidak ditemukan", "Entri ini mungkin sudah dihapus.")
                 FaunaryButton("Kembali", onBack, Modifier.align(Alignment.CenterHorizontally), kind = ButtonKind.Ghost)
             }
-            is DetailUiState.Ready -> DetailContent(s.sighting, viewModel, onBack, onShowOnMap, onEditLocation, onRoute)
+            is DetailUiState.Ready -> DetailContent(s.sighting, viewModel, onBack, onShowOnMap, onRoute)
         }
     }
 }
@@ -113,7 +111,6 @@ private fun DetailContent(
     viewModel: DetailViewModel,
     onBack: () -> Unit,
     onShowOnMap: (Long) -> Unit,
-    onEditLocation: (String) -> Unit,
     onRoute: (Double, Double, String) -> Unit,
 ) {
     val c = FaunaryTheme.colors
@@ -254,7 +251,7 @@ private fun DetailContent(
                 CardTitle(Icons.Rounded.PinDrop, "Lokasi & koordinat", Modifier.weight(1f))
                 Pill(
                     if (s.locationManual) "Manual" else "GPS" + (s.locationAccuracy?.let { " ±${it.roundToInt()}m" } ?: ""),
-                    icon = if (s.locationManual) Icons.Rounded.EditLocationAlt else Icons.Rounded.GpsFixed,
+                    icon = if (s.locationManual) Icons.Rounded.EditLocationAlt else FaunaryIcons.Gps,
                     color = c.badgeNature,
                 )
             }
@@ -265,16 +262,9 @@ private fun DetailContent(
             Text(Format.coordinates(s.latitude, s.longitude), style = MaterialTheme.typography.labelLarge, color = c.brand)
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FaunaryButton("Lihat di Peta", { onShowOnMap(s.id) }, Modifier.weight(1f), kind = ButtonKind.Secondary, icon = Icons.Rounded.Map, height = 44.dp)
+                FaunaryButton("Lihat di Peta", { onShowOnMap(s.id) }, Modifier.weight(1f), kind = ButtonKind.Secondary, icon = FaunaryIcons.Maps, height = 44.dp)
                 FaunaryButton("Rute", { onRoute(s.latitude, s.longitude, s.animalLabel) }, Modifier.weight(1f), icon = Icons.Rounded.Directions, height = 44.dp)
             }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Ubah lokasi",
-                style = MaterialTheme.typography.labelLarge, color = c.primary,
-                modifier = Modifier.align(Alignment.CenterHorizontally).clip(CircleShape)
-                    .clickable { onEditLocation("${s.latitude},${s.longitude}") }.padding(10.dp),
-            )
         }
         Spacer(Modifier.height(12.dp))
 

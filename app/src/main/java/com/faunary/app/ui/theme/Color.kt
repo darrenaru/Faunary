@@ -13,8 +13,6 @@ val EarthBrown = Color(0xFF7A4E28)
 val DeepBrown = Color(0xFF4A3023)
 val Cream = Color(0xFFF5EDE0)
 val SoftCream = Color(0xFFFBF8F1)
-val MutedOlive = Color(0xFFA6A67A)
-val SoftBlush = Color(0xFFE7C8C8)
 
 /**
  * Semantic tokens that don't map cleanly onto Material 3 roles.

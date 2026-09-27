@@ -32,9 +32,20 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
 
-data class GeoPoint(val latitude: Double, val longitude: Double, val accuracy: Float? = null)
+/** [accuracy] is the 68% radius in metres; [timeMs] is when the fix was taken (0 = unknown). */
+data class GeoPoint(val latitude: Double, val longitude: Double, val accuracy: Float? = null, val timeMs: Long = 0L)
 
 data class Place(val shortName: String, val fullAddress: String?)
+
+/** How precise a find's location must be: finds are pinned exactly where the animal was photographed. */
+object GpsAccuracy {
+    /** Good enough to stop refining (typical open-sky GPS). */
+    const val GOOD_METERS = 10f
+    /** A find can only be saved with a fix at least this precise. */
+    const val MAX_SAVE_METERS = 30f
+    /** A fix from the camera is only used for the photo if it is at most this old at the shutter press. */
+    const val CAPTURE_MAX_AGE_MS = 10_000L
+}
 
 @Singleton
 class LocationRepository @Inject constructor(
@@ -48,6 +59,10 @@ class LocationRepository @Inject constructor(
     fun hasPermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    /** Android 12+ lets users grant only an approximate (≈ km) location; finds need the precise one. */
+    fun hasPreciseLocation(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
     @SuppressLint("MissingPermission")
     suspend fun currentLocation(timeoutMs: Long = 8_000): GeoPoint? {
@@ -73,7 +88,7 @@ class LocationRepository @Inject constructor(
             .also { _lastFix.value = it }
     }
 
-    /** Continuous high-accuracy fixes (used while navigating); stops when the collector goes away. */
+    /** Continuous high-accuracy GPS fixes (camera, review, navigation); stops when the collector goes away. */
     @SuppressLint("MissingPermission")
     fun updates(intervalMs: Long = 1_000): Flow<GeoPoint> = callbackFlow {
         if (!hasPermission()) {
@@ -86,7 +101,7 @@ class LocationRepository @Inject constructor(
         val callback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let {
-                    val p = GeoPoint(it.latitude, it.longitude, if (it.hasAccuracy()) it.accuracy else null)
+                    val p = GeoPoint(it.latitude, it.longitude, if (it.hasAccuracy()) it.accuracy else null, it.time)
                     _lastFix.value = p
                     trySend(p)
                 }

@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.EmojiNature
-import androidx.compose.material.icons.rounded.FlutterDash
 import androidx.compose.material.icons.rounded.Pets
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -52,7 +51,7 @@ val AnimalCategory.icon: ImageVector
     get() = when (this) {
         AnimalCategory.CAT -> FaunaryIcons.Cat
         AnimalCategory.DOG -> FaunaryIcons.Dog
-        AnimalCategory.BIRD -> Icons.Rounded.FlutterDash
+        AnimalCategory.BIRD -> FaunaryIcons.Bird
         AnimalCategory.WILD -> Icons.Rounded.EmojiNature
         AnimalCategory.OTHER -> Icons.Rounded.Pets
     }

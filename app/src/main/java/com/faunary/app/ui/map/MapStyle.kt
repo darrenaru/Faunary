@@ -1,10 +1,12 @@
 package com.faunary.app.ui.map
 
 /**
- * A minimal Mapbox style built on streets-v8 tiles with the warm, low-saturation palette
- * (cream land, muted parks, soft water, low-contrast roads, few labels).
+ * 2D: a minimal Mapbox style built on streets-v8 tiles with the warm, low-saturation palette
+ * (cream land, muted parks, soft water, low-contrast roads, few labels). Light on data and battery.
  *
- * In 3D mode it adds terrain + hillshade, extruded buildings and a warm sky/fog.
+ * 3D: Mapbox Standard imported as the basemap for its 3D buildings (with façades), landmarks and
+ * trees, recoloured with the same palette, plus terrain. Day light in the light theme, dusk light in
+ * the dark theme (night light turns everything near-black outside lit city centres).
  *
  * Always uses the globe projection: zoomed far out the map becomes a 3D globe (with a soft
  * atmosphere and country labels), and it flattens back to a regular map around zoom 5–6.
@@ -14,7 +16,7 @@ object MapStyle {
         val land: String, val park: String, val water: String, val building: String,
         val road: String, val roadMajor: String, val roadCasing: String,
         val label: String, val labelHalo: String, val placeLabel: String,
-        val extrusion: String, val hillShadow: String, val hillHighlight: String,
+        val extrusion: String,
         val fogHigh: String, val space: String,
         val border: String, val countryLabel: String, val stars: Double,
     )
@@ -23,7 +25,7 @@ object MapStyle {
         land = "#F5EDE0", park = "#D8DEB2", water = "#C8D9E8", building = "#EDE2D2",
         road = "#FBF8F1", roadMajor = "#F3E3CF", roadCasing = "#E5D7C6",
         label = "#7A6658", labelHalo = "#F5EDE0", placeLabel = "#4A3023",
-        extrusion = "#E2D2BC", hillShadow = "#7A4E28", hillHighlight = "#FBF8F1",
+        extrusion = "#E2D2BC",
         fogHigh = "#F7D89A", space = "#D8E2F0",
         border = "#C9B49C", countryLabel = "#6B5444", stars = 0.0,
     )
@@ -32,67 +34,79 @@ object MapStyle {
         land = "#29231F", park = "#35382A", water = "#2B3640", building = "#332A24",
         road = "#3A302A", roadMajor = "#4A3C31", roadCasing = "#221C18",
         label = "#AFA094", labelHalo = "#29231F", placeLabel = "#F5EDE0",
-        extrusion = "#54443A", hillShadow = "#120E0B", hillHighlight = "#655246",
+        extrusion = "#54443A",
         fogHigh = "#40342B", space = "#1E1814",
         border = "#5A4A3E", countryLabel = "#CDBFB2", stars = 0.25,
     )
 
     fun json(darkTheme: Boolean, threeD: Boolean = false): String {
         val p = if (darkTheme) dark else light
+        return if (threeD) standard3D(p, darkTheme) else flat(p)
+    }
 
-        val demSource = if (threeD) {
-            // Separate DEM sources: sharing one between terrain and hillshade halves hillshade resolution.
-            """, "mapbox-dem": { "type": "raster-dem", "url": "mapbox://mapbox.mapbox-terrain-dem-v1", "tileSize": 512, "maxzoom": 14 },
-            "hillshade-dem": { "type": "raster-dem", "url": "mapbox://mapbox.mapbox-terrain-dem-v1", "tileSize": 512, "maxzoom": 14 }"""
-        } else ""
-
-        // Lights stay neutral white (ambient 0.8 + sun 0.2): tinted light would recolour every
-        // flat layer and push the cream palette towards yellow.
-        // Fog is also the globe's atmosphere and the colour of space around it, so it's on in 2D too.
-        val globe = """
+    /** Fog is also the globe's atmosphere and the colour of space around it, so both styles use it. */
+    private fun globe(p: Palette) = """
           "projection": { "name": "globe" },
           "fog": { "range": [1, 12], "color": "${p.land}", "high-color": "${p.fogHigh}", "horizon-blend": 0.12, "space-color": "${p.space}", "star-intensity": ${p.stars} },"""
 
-        val atmosphere = if (threeD) {
-            """
+    private fun standard3D(p: Palette, darkTheme: Boolean): String = """
+        {
+          "version": 8,
+          "name": "Faunary 3D",${globe(p)}
+          "imports": [
+            {
+              "id": "basemap",
+              "url": "mapbox://styles/mapbox/standard",
+              "config": {
+                "lightPreset": "${if (darkTheme) "dusk" else "day"}",
+                "font": "Inter",
+                "show3dObjects": true,
+                "show3dBuildings": true,
+                "show3dFacades": true,
+                "show3dLandmarks": true,
+                "show3dTrees": true,
+                "showLandmarkIcons": true,
+                "showPlaceLabels": true,
+                "showRoadLabels": true,
+                "showPointOfInterestLabels": false,
+                "showTransitLabels": false,
+                "colorLand": "${p.land}",
+                "colorWater": "${p.water}",
+                "colorGreenspace": "${p.park}",
+                "colorCommercial": "${p.building}",
+                "colorEducation": "${p.building}",
+                "colorMedical": "${p.building}",
+                "colorIndustrial": "${p.building}",
+                "colorRoads": "${p.road}",
+                "colorTrunks": "${p.roadMajor}",
+                "colorMotorways": "${p.roadMajor}",
+                "colorBuildings": "${p.extrusion}",
+                "colorPlaceLabels": "${p.placeLabel}",
+                "colorRoadLabels": "${p.label}",
+                "colorAdminBoundaries": "${p.border}"
+              }
+            }
+          ],
+          "sources": {
+            "mapbox-dem": { "type": "raster-dem", "url": "mapbox://mapbox.mapbox-terrain-dem-v1", "tileSize": 512, "maxzoom": 14 }
+          },
           "terrain": { "source": "mapbox-dem", "exaggeration": 1.4 },
-          "lights": [
-            { "id": "ambient", "type": "ambient", "properties": { "color": "#FFFFFF", "intensity": 0.8 } },
-            { "id": "sun", "type": "directional", "properties": { "color": "#FFFFFF", "intensity": 0.2,
-              "direction": [210, 40], "cast-shadows": true, "shadow-intensity": ${if (darkTheme) 0.5 else 0.35} } }
-          ],"""
-        } else ""
+          "layers": []
+        }
+        """.trimIndent()
 
-        val hillshade = if (threeD) {
-            """
-            { "id": "hillshade", "type": "hillshade", "source": "hillshade-dem",
-              "paint": { "hillshade-shadow-color": "${p.hillShadow}", "hillshade-highlight-color": "${p.hillHighlight}",
-                         "hillshade-accent-color": "${p.hillShadow}", "hillshade-exaggeration": ${if (darkTheme) 0.35 else 0.25} } },"""
-        } else ""
-
-        // Flat footprints in 2D; extruded, softly lit blocks in 3D (drawn above roads, below labels).
-        val flatBuildings = if (threeD) "" else """
+    private fun flat(p: Palette): String {
+        val flatBuildings = """
             { "id": "building", "type": "fill", "source": "streets", "source-layer": "building", "minzoom": 14,
               "paint": { "fill-color": "${p.building}", "fill-opacity": ["interpolate", ["linear"], ["zoom"], 14, 0, 16, 0.8] } },"""
-        val extrudedBuildings = if (!threeD) "" else """
-            { "id": "building-3d", "type": "fill-extrusion", "source": "streets", "source-layer": "building", "minzoom": 14,
-              "filter": ["==", ["get", "extrude"], "true"],
-              "paint": {
-                "fill-extrusion-color": "${p.extrusion}",
-                "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], 14, 0, 15.5, ["max", ["get", "height"], 4]],
-                "fill-extrusion-base": ["interpolate", ["linear"], ["zoom"], 14, 0, 15.5, ["get", "min_height"]],
-                "fill-extrusion-opacity": 0.92,
-                "fill-extrusion-cast-shadows": true,
-                "fill-extrusion-vertical-gradient": true
-              } },"""
 
         return """
         {
           "version": 8,
           "name": "Faunary Warm",
-          "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",$globe$atmosphere
+          "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",${globe(p)}
           "sources": {
-            "streets": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8" }$demSource
+            "streets": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8" }
           },
           "layers": [
             { "id": "land", "type": "background", "paint": { "background-color": "${p.land}" } },
@@ -100,7 +114,7 @@ object MapStyle {
               "filter": ["match", ["get", "class"], ["park", "grass", "wood", "scrub", "pitch", "cemetery", "agriculture", "golf_course"], true, false],
               "paint": { "fill-color": "${p.park}", "fill-opacity": 0.9 } },
             { "id": "national-park", "type": "fill", "source": "streets", "source-layer": "landuse_overlay",
-              "paint": { "fill-color": "${p.park}", "fill-opacity": 0.6 } },$hillshade
+              "paint": { "fill-color": "${p.park}", "fill-opacity": 0.6 } },
             { "id": "water", "type": "fill", "source": "streets", "source-layer": "water",
               "paint": { "fill-color": "${p.water}" } },
             { "id": "waterway", "type": "line", "source": "streets", "source-layer": "waterway",
@@ -126,7 +140,6 @@ $flatBuildings
               "filter": ["match", ["get", "class"], ["motorway", "trunk", "primary", "secondary", "tertiary"], true, false],
               "layout": { "line-cap": "round", "line-join": "round" },
               "paint": { "line-color": "${p.roadMajor}", "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 0.5, 18, 18] } },
-$extrudedBuildings
             { "id": "road-label", "type": "symbol", "source": "streets", "source-layer": "road", "minzoom": 14,
               "filter": ["has", "name"],
               "layout": { "symbol-placement": "line", "text-field": ["get", "name"], "text-size": 11,

@@ -41,7 +41,6 @@ import com.faunary.app.ui.detail.DetailScreen
 import com.faunary.app.ui.gallery.GalleryScreen
 import com.faunary.app.ui.journal.JournalScreen
 import com.faunary.app.ui.map.MapScreen
-import com.faunary.app.ui.picker.LocationPickerScreen
 import com.faunary.app.ui.profile.ProfileScreen
 import com.faunary.app.ui.review.ReviewScreen
 
@@ -79,7 +78,8 @@ fun FaunaryNavHost(
     // Turn-by-turn navigation on the map takes the whole screen, so the tab bar steps aside.
     var mapNavigating by remember { mutableStateOf(false) }
     val openDetail: (Long) -> Unit = { navController.navigate(DetailRoute(it)) }
-    val openCamera: () -> Unit = { navController.navigate(CameraRoute) }
+    // Single top: a quick double tap must not stack two cameras.
+    val openCamera: () -> Unit = { navController.navigate(CameraRoute) { launchSingleTop = true } }
     val routeOnMap: (Double, Double, String) -> Unit = { lat, lng, label ->
         navController.navigate(MapRoute(routeTo = encodeLatLng(lat, lng), routeLabel = label)) {
             popUpTo(navController.graph.findStartDestination().id) { inclusive = true }
@@ -138,9 +138,8 @@ fun FaunaryNavHost(
             ) {
                 CameraScreen(
                     onBack = { navController.popBackStack() },
-                    onPhotoReady = { path, lat, lng ->
-                        val exif = if (lat != null && lng != null) encodeLatLng(lat, lng) else null
-                        navController.navigate(ReviewRoute(path, exif)) {
+                    onPhotoReady = { path, fix ->
+                        navController.navigate(ReviewRoute(path, capturedAt = System.currentTimeMillis(), captureFix = fix?.let(::encodeFix))) {
                             popUpTo<CameraRoute> { inclusive = true }
                         }
                     },
@@ -151,7 +150,6 @@ fun FaunaryNavHost(
             ) {
                 ReviewScreen(
                     onBack = { navController.popBackStack() },
-                    onPickLocation = { start -> navController.navigate(LocationPickerRoute(start)) },
                     onSaved = { id ->
                         navController.navigate(MapRoute(focusId = id)) {
                             popUpTo(navController.graph.findStartDestination().id) { inclusive = true }
@@ -172,7 +170,6 @@ fun FaunaryNavHost(
                             launchSingleTop = true
                         }
                     },
-                    onEditLocation = { start -> navController.navigate(LocationPickerRoute(start)) },
                     onRoute = routeOnMap,
                 )
             }
@@ -181,16 +178,6 @@ fun FaunaryNavHost(
                 popExitTransition = { slideOutHorizontally(tween(200)) { it / 4 } + fadeOut(tween(200)) },
             ) {
                 CommunityDetailScreen(onBack = { navController.popBackStack() }, onRoute = routeOnMap)
-            }
-            composable<LocationPickerRoute> { entry ->
-                LocationPickerScreen(
-                    start = decodeLatLng(entry.toRoute<LocationPickerRoute>().start),
-                    onBack = { navController.popBackStack() },
-                    onPicked = { lat, lng ->
-                        navController.previousBackStackEntry?.savedStateHandle?.set(PICKED_LOCATION_KEY, encodeLatLng(lat, lng))
-                        navController.popBackStack()
-                    },
-                )
             }
         }
 

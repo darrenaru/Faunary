@@ -1,10 +1,9 @@
 package com.faunary.app.ui.camera
 
 import android.Manifest
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts
+import com.faunary.app.location.GeoPoint
+import com.faunary.app.location.GpsAccuracy
+import com.faunary.app.ui.components.FaunaryIcons
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -37,13 +36,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.FlashAuto
 import androidx.compose.material.icons.rounded.FlashOff
 import androidx.compose.material.icons.rounded.FlashOn
 import androidx.compose.material.icons.rounded.FlipCameraAndroid
-import androidx.compose.material.icons.rounded.MyLocation
-import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -91,13 +87,14 @@ import kotlin.math.roundToInt
 @Composable
 fun CameraScreen(
     onBack: () -> Unit,
-    onPhotoReady: (path: String, exifLat: Double?, exifLng: Double?) -> Unit,
+    /** [fix] is the GPS position at the shutter press, or null if there was no fresh one. */
+    onPhotoReady: (path: String, fix: GeoPoint?) -> Unit,
     viewModel: CameraViewModel = hiltViewModel(),
 ) {
     val c = FaunaryTheme.colors
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val fix by viewModel.lastFix.collectAsStateWithLifecycle()
+    val fix by viewModel.fix.collectAsStateWithLifecycle()
     val busy by viewModel.busy.collectAsStateWithLifecycle()
 
     // The camera UI is always dark: force light status/nav bar icons while it is shown.
@@ -117,14 +114,9 @@ fun CameraScreen(
     }
 
     val cameraPermission = rememberPermissionState(arrayOf(Manifest.permission.CAMERA))
-    val locationPermission = rememberPermissionState(LocationPermissions) { if (it) viewModel.warmUpLocation() }
+    val locationPermission = rememberPermissionState(LocationPermissions) { if (it) viewModel.onLocationPermissionGranted() }
     LaunchedEffect(Unit) {
         if (!cameraPermission.granted) cameraPermission.request()
-        if (locationPermission.granted) viewModel.warmUpLocation()
-    }
-
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
-        if (uri != null) viewModel.import(uri) { path, exif -> onPhotoReady(path, exif?.latitude, exif?.longitude) }
     }
 
     Box(Modifier.fillMaxSize().background(Color(0xFF1E1814))) {
@@ -133,6 +125,8 @@ fun CameraScreen(
                 LifecycleCameraController(context).apply {
                     setEnabledUseCases(CameraController.IMAGE_CAPTURE)
                     imageCaptureMode = ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
+                    // Match the flash button, which starts on "auto" (the controller defaults to off).
+                    imageCaptureFlashMode = ImageCapture.FLASH_MODE_AUTO
                 }
             }
             DisposableEffect(lifecycleOwner) {
@@ -184,12 +178,26 @@ fun CameraScreen(
                         Modifier.weight(1f).clip(CircleShape).background(DeepBrown.copy(alpha = 0.55f)).padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Rounded.MyLocation, null, Modifier.size(14.dp), tint = Buttercream)
+                        Icon(FaunaryIcons.Gps, null, Modifier.size(14.dp), tint = Buttercream)
                         Spacer(Modifier.width(6.dp))
+                        // Signal dot: green = precise, amber = usable, red = too coarse to save yet.
+                        val accuracy = fix?.accuracy
+                        if (accuracy != null) {
+                            Box(
+                                Modifier.size(8.dp).clip(CircleShape).background(
+                                    when {
+                                        accuracy <= GpsAccuracy.GOOD_METERS -> Color(0xFF7FB069)
+                                        accuracy <= GpsAccuracy.MAX_SAVE_METERS -> Buttercream
+                                        else -> Color(0xFFE07A5F)
+                                    },
+                                ),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
                         Text(
                             fix?.let { f ->
                                 Format.coordinates(f.latitude, f.longitude) + (f.accuracy?.let { " · ±${it.roundToInt()}m" } ?: "")
-                            } ?: if (locationPermission.granted) "Mencari sinyal GPS…" else "Lokasi nonaktif",
+                            } ?: if (locationPermission.granted) "Mengunci sinyal GPS…" else "Lokasi nonaktif",
                             style = MaterialTheme.typography.labelMedium,
                             color = SoftCream,
                             maxLines = 1,
@@ -244,10 +252,12 @@ fun CameraScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    LabeledGlassButton(Icons.Rounded.PhotoLibrary, "Galeri") {
-                        picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                    }
+                    // Photos only come from the live camera (no gallery import), so finds stay first-hand.
+                    // This keeps the shutter centred opposite the flip button.
+                    Spacer(Modifier.width(52.dp))
                     ShutterButton(enabled = !busy) {
+                        // Where the animal is: the position at the moment of the shot.
+                        val shotFix = viewModel.captureFix()
                         val file = viewModel.newCaptureFile()
                         shutterFlash = true
                         viewModel.setBusy(true)
@@ -257,7 +267,7 @@ fun CameraScreen(
                             object : ImageCapture.OnImageSavedCallback {
                                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                                     viewModel.setBusy(false)
-                                    onPhotoReady(file.absolutePath, null, null)
+                                    onPhotoReady(file.absolutePath, shotFix)
                                 }
 
                                 override fun onError(exception: ImageCaptureException) {
@@ -281,21 +291,12 @@ fun CameraScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 PermissionCard(
-                    icon = Icons.Rounded.CameraAlt,
+                    icon = FaunaryIcons.Camera,
                     title = "Izinkan akses kamera",
-                    message = "Kamera dipakai untuk memotret satwa yang kamu temui. AI mendeteksi jenis hewannya langsung di perangkat — foto tidak diunggah ke mana pun.",
+                    message = "Temuan hanya bisa dipotret langsung dengan kamera saat kamu melihat satwanya. Untuk mengenali jenis hewannya, foto dikirim ke layanan AI (Google Gemini); tanpa internet, deteksi berjalan langsung di perangkat.",
                     actionLabel = "Izinkan Kamera",
                     onAction = { cameraPermission.request() },
                     permanentlyDenied = cameraPermission.permanentlyDenied,
-                )
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "atau pilih dari galeri",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = Buttercream,
-                    modifier = Modifier.clip(CircleShape).clickable {
-                        picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                    }.padding(12.dp),
                 )
             }
         }
@@ -387,7 +388,7 @@ private fun ShutterButton(enabled: Boolean, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Box(Modifier.size(64.dp).clip(CircleShape).background(Canyon), contentAlignment = Alignment.Center) {
-            Icon(Icons.Rounded.CameraAlt, null, Modifier.size(28.dp), tint = SoftCream)
+            Icon(FaunaryIcons.Camera, null, Modifier.size(28.dp), tint = SoftCream)
         }
     }
     LaunchedEffect(pressed) {

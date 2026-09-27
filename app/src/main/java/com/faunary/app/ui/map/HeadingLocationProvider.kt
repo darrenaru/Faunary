@@ -6,12 +6,15 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Path
+import android.graphics.Matrix
+import android.graphics.RectF
 import com.mapbox.maps.plugin.PuckBearing
 import com.mapbox.maps.plugin.locationcomponent.DefaultLocationProvider
 import com.mapbox.maps.plugin.locationcomponent.LocationConsumer
 import com.mapbox.maps.plugin.locationcomponent.LocationProvider
+import androidx.core.graphics.PathParser
 import androidx.core.graphics.createBitmap
+import kotlin.math.max
 
 /**
  * GPS position (and accuracy) from Mapbox's default provider, but the puck's direction comes from
@@ -51,18 +54,26 @@ class HeadingLocationProvider(context: Context) : LocationProvider {
     }
 }
 
-/** "You are here" arrow: blue chevron with a white rim and soft shadow, pointing up (north at bearing 0). */
+/**
+ * "You are here" arrow (Jam Icons "gps-f"): blue with a white rim and soft shadow, pointing up
+ * (north at bearing 0) so the puck can rotate it with the heading.
+ */
 fun locationArrowBitmap(density: Float): Bitmap {
     val size = (48 * density).toInt()
     val bmp = createBitmap(size, size)
     val canvas = Canvas(bmp)
     val s = size.toFloat()
-    val path = Path().apply {
-        moveTo(s * 0.50f, s * 0.12f) // tip
-        lineTo(s * 0.80f, s * 0.84f)
-        lineTo(s * 0.50f, s * 0.68f) // notch
-        lineTo(s * 0.20f, s * 0.84f)
-        close()
+    val path = PathParser.createPathFromPathData(GPS_ARROW_PATH).apply {
+        // The icon points to the upper right; turn it to point straight up.
+        transform(Matrix().apply { setRotate(-45f) })
+        // Centre it on the bitmap and scale it to leave room for the rim and shadow.
+        val bounds = RectF().also { computeBounds(it, true) }
+        val scale = s * 0.62f / max(bounds.width(), bounds.height())
+        transform(Matrix().apply {
+            setTranslate(-bounds.centerX(), -bounds.centerY())
+            postScale(scale, scale)
+            postTranslate(s / 2, s / 2)
+        })
     }
     val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -79,3 +90,7 @@ fun locationArrowBitmap(density: Float): Bitmap {
     canvas.drawPath(path, fill)
     return bmp
 }
+
+/** Path data of the Jam Icons "gps-f" arrow (source viewBox -2 -2 24 24). */
+private const val GPS_ARROW_PATH =
+    "m18.919 2.635l-5.953 16.08c-.376 1.016-1.459 1.538-2.418 1.165a1.85 1.85 0 0 1-1.045-1.054l-1.887-4.77a3.7 3.7 0 0 0-1.955-2.052l-4.542-1.981C.174 9.61-.256 8.465.157 7.465a1.97 1.97 0 0 1 1.067-1.079L16.54.136c.967-.395 2.04.101 2.395 1.109c.157.446.151.94-.015 1.39z"

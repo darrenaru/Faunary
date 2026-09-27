@@ -1,5 +1,6 @@
 package com.faunary.app.ui.navigation
 
+import com.faunary.app.location.GeoPoint
 import kotlinx.serialization.Serializable
 
 /** [routeTo] ("lat,lng") + [routeLabel] open the map with an in-app route already drawn. */
@@ -18,9 +19,12 @@ data object ProfileRoute
 @Serializable
 data object CameraRoute
 
-/** [exif] carries "lat,lng" from an imported photo's EXIF when available. */
+/**
+ * [photoPath] is the fresh camera capture to review; [capturedAt] is when the shutter was pressed and
+ * [captureFix] the GPS fix at that moment ([encodeFix]), if the camera had a fresh one.
+ */
 @Serializable
-data class ReviewRoute(val photoPath: String, val exif: String? = null)
+data class ReviewRoute(val photoPath: String, val capturedAt: Long, val captureFix: String? = null)
 
 @Serializable
 data class DetailRoute(val id: Long)
@@ -40,16 +44,19 @@ sealed interface NotificationOpen {
     data object Inbox : NotificationOpen
 }
 
-/** [start] is an optional "lat,lng" to centre the picker on. */
-@Serializable
-data class LocationPickerRoute(val start: String? = null)
-
 const val NO_ID = -1L
 
-/** SavedStateHandle key used by the location picker to hand back "lat,lng". */
-const val PICKED_LOCATION_KEY = "picked_location"
-
 fun encodeLatLng(lat: Double, lng: Double) = "$lat,$lng"
+
+/** "lat,lng,accuracy,timeMs" (accuracy may be empty). */
+fun encodeFix(fix: GeoPoint) = "${fix.latitude},${fix.longitude},${fix.accuracy ?: ""},${fix.timeMs}"
+
+fun decodeFix(value: String?): GeoPoint? {
+    val parts = value?.split(",")?.takeIf { it.size == 4 } ?: return null
+    val lat = parts[0].toDoubleOrNull() ?: return null
+    val lng = parts[1].toDoubleOrNull() ?: return null
+    return GeoPoint(lat, lng, parts[2].toFloatOrNull(), parts[3].toLongOrNull() ?: 0L)
+}
 
 fun decodeLatLng(value: String?): Pair<Double, Double>? {
     val parts = value?.split(",") ?: return null
